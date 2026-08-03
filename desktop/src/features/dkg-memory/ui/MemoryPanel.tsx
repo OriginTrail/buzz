@@ -11,7 +11,7 @@ import {
   useDiscoveryFallback,
   useProfileNames,
 } from "../hooks";
-import { nodeUiDeepLink } from "../api";
+import { explorerSource, nodeUiDeepLink } from "../api";
 import { EvidenceCard } from "./EvidenceCard";
 import { GraphOverlay } from "./GraphOverlay";
 
@@ -129,19 +129,28 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
     <PanelShell
       title="Memory"
       action={
-        <a
-          className="text-xs text-primary hover:underline"
-          href={nodeUiDeepLink(cg)}
-          target="_blank"
-          rel="noreferrer"
-        >
-          open in node ↗
-        </a>
+        explorerSource() === "local" ? (
+          <a
+            className="text-xs text-primary hover:underline"
+            href={nodeUiDeepLink(cg)}
+            target="_blank"
+            rel="noreferrer"
+          >
+            open in node ↗
+          </a>
+        ) : null
       }
     >
-      <div className="mb-2 rounded-md border border-green-600/40 bg-green-600/10 px-2 py-1 text-xs">
-        ✓ Verified through your node
-      </div>
+      {explorerSource() === "gateway" ? (
+        <div className="mb-2 rounded-md border border-sky-600/40 bg-sky-600/10 px-2 py-1 text-xs">
+          ✓ Resolved via community gateway — full memory from the community's
+          node. Run your own node to verify independently.
+        </div>
+      ) : (
+        <div className="mb-2 rounded-md border border-green-600/40 bg-green-600/10 px-2 py-1 text-xs">
+          ✓ Verified through your node
+        </div>
+      )}
       {/* What this channel remembers — plain-language summary + layer ladder */}
       <section className="mb-3">
         <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">

@@ -7,7 +7,47 @@
 // binding, which the @dkg daemon's receipts carry in-channel.
 import { relayClient } from "@/shared/api/relayClient";
 
-const EXPLORER = "http://127.0.0.1:9295";
+// Local-first with community-gateway fallback (RFC deployment profile 2):
+// the viewer's own explorer/node wins when present; otherwise the panel
+// resolves through the community's gateway node over the tailnet — full
+// fidelity, honestly labeled as gateway-resolved rather than self-verified.
+const LOCAL_EXPLORER = "http://127.0.0.1:9295";
+const GATEWAY_EXPLORER = "https://macbook-pro-8.tailb02f7e.ts.net/wot-explorer";
+
+export type ExplorerSource = "local" | "gateway";
+
+let resolvedExplorer: { url: string; source: ExplorerSource } | null = null;
+
+async function explorer(): Promise<{ url: string; source: ExplorerSource }> {
+  if (resolvedExplorer) return resolvedExplorer;
+  try {
+    const override = localStorage.getItem("dkg-memory-explorer-url");
+    if (override) {
+      resolvedExplorer = {
+        url: override.replace(/\/$/, ""),
+        source: override.includes("127.0.0.1") ? "local" : "gateway",
+      };
+      return resolvedExplorer;
+    }
+  } catch {
+    /* storage unavailable */
+  }
+  try {
+    // Any HTTP response (even an error status) proves a local explorer exists.
+    await fetch(`${LOCAL_EXPLORER}/api/channel-memory?cg=probe`, {
+      signal: AbortSignal.timeout(1500),
+    });
+    resolvedExplorer = { url: LOCAL_EXPLORER, source: "local" };
+  } catch {
+    resolvedExplorer = { url: GATEWAY_EXPLORER, source: "gateway" };
+  }
+  return resolvedExplorer;
+}
+
+/** Which explorer the panel resolved through (null until first fetch). */
+export function explorerSource(): ExplorerSource | null {
+  return resolvedExplorer?.source ?? null;
+}
 
 export type MemoryGate = "ok" | "node-missing" | "auth" | "not-subscribed";
 
@@ -86,8 +126,9 @@ export async function deriveContextGraphId(
 }
 
 export async function fetchChannelMemory(cg: string): Promise<ChannelMemory> {
+  const { url } = await explorer();
   const res = await fetch(
-    `${EXPLORER}/api/channel-memory?cg=${encodeURIComponent(cg)}`,
+    `${url}/api/channel-memory?cg=${encodeURIComponent(cg)}`,
   );
   if (!res.ok) throw new Error(`channel-memory ${res.status}`);
   return (await res.json()) as ChannelMemory;
@@ -97,8 +138,9 @@ export async function fetchContributorTrail(
   cg: string,
   pubkey: string,
 ): Promise<TrailEntry[]> {
+  const { url } = await explorer();
   const res = await fetch(
-    `${EXPLORER}/api/contributor-trail?cg=${encodeURIComponent(cg)}&pubkey=${encodeURIComponent(pubkey)}`,
+    `${url}/api/contributor-trail?cg=${encodeURIComponent(cg)}&pubkey=${encodeURIComponent(pubkey)}`,
   );
   if (!res.ok) throw new Error(`contributor-trail ${res.status}`);
   return (await res.json()) as TrailEntry[];
@@ -138,8 +180,9 @@ export async function fetchSubgraphGraph(
   cg: string,
   name: string,
 ): Promise<SubgraphGraphData> {
+  const { url } = await explorer();
   const res = await fetch(
-    `${EXPLORER}/api/subgraph-graph?cg=${encodeURIComponent(cg)}&name=${encodeURIComponent(name)}`,
+    `${url}/api/subgraph-graph?cg=${encodeURIComponent(cg)}&name=${encodeURIComponent(name)}`,
   );
   if (!res.ok) throw new Error(`subgraph-graph ${res.status}`);
   return (await res.json()) as SubgraphGraphData;
@@ -206,8 +249,9 @@ export async function fetchEvidence(
   cg: string,
   uri: string,
 ): Promise<EvidenceEnvelope> {
+  const { url } = await explorer();
   const res = await fetch(
-    `${EXPLORER}/api/evidence?cg=${encodeURIComponent(cg)}&uri=${encodeURIComponent(uri)}`,
+    `${url}/api/evidence?cg=${encodeURIComponent(cg)}&uri=${encodeURIComponent(uri)}`,
   );
   if (!res.ok) throw new Error(`evidence ${res.status}`);
   return (await res.json()) as EvidenceEnvelope;
