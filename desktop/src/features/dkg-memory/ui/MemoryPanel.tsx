@@ -143,8 +143,8 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
     >
       {explorerSource() === "gateway" ? (
         <div className="mb-2 rounded-md border border-sky-600/40 bg-sky-600/10 px-2 py-1 text-xs">
-          ✓ Resolved via community gateway — full memory from the community's
-          node. Run your own node to verify independently.
+          ✓ Resolved through the community DKG provider — full memory from the
+          community's node. Run your own node to verify independently.
         </div>
       ) : (
         <div className="mb-2 rounded-md border border-green-600/40 bg-green-600/10 px-2 py-1 text-xs">

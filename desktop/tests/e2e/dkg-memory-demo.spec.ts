@@ -121,7 +121,7 @@ test.describe("dkg memory panel demo", () => {
     await page.getByTestId("dkg-memory-toggle").click();
     const panel = page.getByTestId("dkg-memory-panel");
     await expect(
-      panel.getByText(/resolved via community gateway/i),
+      panel.getByText(/resolved through the community dkg provider/i),
     ).toBeVisible({ timeout: 25_000 });
     await expect(panel.getByText(/what this channel remembers/i)).toBeVisible({
       timeout: 25_000,
