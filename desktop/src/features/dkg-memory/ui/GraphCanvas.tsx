@@ -114,7 +114,7 @@ export function GraphCanvas({
         width={width}
         height={height}
         role="img"
-        aria-label="Decision spine graph"
+        aria-label="Decision traces graph"
         className="min-h-full"
       >
         {/* time axis = the spine line */}

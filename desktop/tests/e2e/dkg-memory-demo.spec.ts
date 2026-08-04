@@ -105,6 +105,44 @@ test.describe("dkg memory panel demo", () => {
     await panel.screenshot({ path: `${SHOTS}/04-contributor-trail.png` });
   });
 
+  test("graph view: node-UI-parity hexagonal canvas", async ({ page }) => {
+    await page.addInitScript((cg) => {
+      window.localStorage.setItem("dkg-memory-cg-override", cg);
+    }, WOT_CG);
+    await installMockBridge(page);
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.getByTestId("channel-engineering").click();
+    await waitForMockLiveSubscription(page, CHANNEL);
+    await emit(page, DELIBERATION[4]); // one receipt to bind the CG
+    await page.getByTestId("dkg-memory-toggle").click();
+    const panel = page.getByTestId("dkg-memory-panel");
+    await expect(panel.getByText(/what this channel remembers/i)).toBeVisible({
+      timeout: 20_000,
+    });
+    // Open a real subgraph as graph.
+    await page.getByTestId("dkg-subgraph-openclaw").click();
+    const overlay = page.getByTestId("dkg-graph-overlay");
+    await expect(overlay).toBeVisible({ timeout: 20_000 });
+    await expect(overlay.getByText("Traces")).toBeVisible();
+    await waitForAnimations(page);
+    await overlay.screenshot({ path: `${SHOTS}/08-traces-view.png` });
+    // Switch to the node-parity Graph mode.
+    await overlay.getByTestId("dkg-topology-toggle").click();
+    await expect(
+      overlay.getByRole("button", { name: "Entity types" }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(overlay.locator("canvas").first()).toBeVisible({
+      timeout: 30_000,
+    });
+    await page.waitForTimeout(2500); // let the force layout settle
+    await waitForAnimations(page);
+    await overlay.screenshot({ path: `${SHOTS}/09-graph-node-parity.png` });
+    // Contributors coloring still available.
+    await overlay.getByRole("button", { name: "Contributors" }).click();
+    await page.waitForTimeout(1200);
+    await overlay.screenshot({ path: `${SHOTS}/10-graph-contributors.png` });
+  });
+
   test("community gateway fallback resolves full memory", async ({ page }) => {
     await page.addInitScript((cg) => {
       window.localStorage.setItem("dkg-memory-cg-override", cg);

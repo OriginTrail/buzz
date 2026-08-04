@@ -112,7 +112,7 @@ export function GraphOverlay({
             onClick={() => setMode("spine")}
             className={`rounded-l-md px-2 py-1 ${mode === "spine" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
           >
-            spine
+            Traces
           </button>
           <button
             type="button"
@@ -120,7 +120,7 @@ export function GraphOverlay({
             data-testid="dkg-topology-toggle"
             className={`rounded-r-md px-2 py-1 ${mode === "topology" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
           >
-            ⬡ topology
+            ⬡ Graph
           </button>
         </div>
         <button
@@ -202,11 +202,17 @@ export function GraphOverlay({
         <aside className="w-80 shrink-0 overflow-y-auto border-l border-border p-3">
           {selection ? (
             <EvidenceRail selection={selection} />
-          ) : (
+          ) : mode === "spine" ? (
             <p className="text-xs text-muted-foreground">
               Select a node to inspect its evidence trail. Boxes on the line are
               decisions in time order; anything hanging off a box is its
               evidence — supports below, counter-claims above.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              The knowledge graph as your DKG node renders it — hexagons are
+              entities, sized by connections; zoom in for labels. Click a node
+              to inspect it, or select one to open its evidence trail here.
             </p>
           )}
         </aside>
