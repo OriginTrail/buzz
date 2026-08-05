@@ -164,6 +164,7 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
         <div className="mb-1 grid grid-cols-3 gap-2">
           {(["WM", "SWM", "VM"] as const).map((tag) => {
             const entries = data.layers?.[tag];
+            const count = data.layers?.[`${tag}Count`] ?? entries?.length;
             const meta = LAYER_META[tag];
             return (
               <div
@@ -181,7 +182,7 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
                   </span>
                 </div>
                 <div className="text-base font-semibold tabular-nums">
-                  {entries ? entries.length : "—"}
+                  {count ?? "—"}
                 </div>
               </div>
             );

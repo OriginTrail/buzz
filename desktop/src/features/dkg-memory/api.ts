@@ -79,7 +79,9 @@ export interface SubGraphEntry {
 export interface ChannelMemory {
   gate: MemoryGate;
   cg?: string;
-  layers?: Record<"WM" | "SWM" | "VM", LayerEntry[] | null>;
+  /** Layer graph lists are display-bounded; the *Count fields are uncapped. */
+  layers?: Record<"WM" | "SWM" | "VM", LayerEntry[] | null> &
+    Partial<Record<"WMCount" | "SWMCount" | "VMCount", number>>;
   decisions?: DecisionEntry[];
   contributors?: ContributorEntry[];
   subgraphs?: SubGraphEntry[];
