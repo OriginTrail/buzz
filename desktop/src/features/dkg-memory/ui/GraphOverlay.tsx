@@ -7,7 +7,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { useSubgraphGraph } from "../hooks";
 import { TopologyView } from "../topology/TopologyView";
-import { GraphCanvas, type GraphSelection, MAX_SPINE } from "./GraphCanvas";
+import { GraphCanvas, type GraphSelection } from "./GraphCanvas";
 
 const LAYER_META = {
   WM: { label: "Draft — only on this node", dot: "bg-slate-400" },
@@ -32,7 +32,6 @@ export function GraphOverlay({
 }) {
   const graph = useSubgraphGraph(cg, subgraph);
   const [selection, setSelection] = useState<GraphSelection | null>(null);
-  const [windowStart, setWindowStart] = useState<number | null>(null);
   // Spine is the first paint; topology (hexagonal RdfGraph) mounts only on
   // this explicit scoped action — per the repurpose wrap's acceptance gate.
   const [mode, setMode] = useState<"spine" | "topology">("spine");
@@ -48,22 +47,6 @@ export function GraphOverlay({
   const data = graph.data;
   const nodes = useMemo(() => data?.nodes ?? [], [data]);
   const edges = useMemo(() => data?.edges ?? [], [data]);
-
-  // First paint: the coarsest window that shows at least one contested
-  // decision; deterministic fallback — the latest window with a decision.
-  const defaultStart = useMemo(() => {
-    const spine = nodes
-      .filter((n) => n.kind === "decision")
-      .sort(
-        (a, b) =>
-          (a.at ?? Number.MAX_SAFE_INTEGER) -
-            (b.at ?? Number.MAX_SAFE_INTEGER) || a.label.localeCompare(b.label),
-      );
-    const contestedIdx = spine.findIndex((n) => (n.contested ?? 0) > 0);
-    if (contestedIdx >= 0)
-      return Math.max(0, Math.min(contestedIdx, spine.length - MAX_SPINE));
-    return Math.max(0, spine.length - MAX_SPINE);
-  }, [nodes]);
 
   const decisionCount = nodes.filter((n) => n.kind === "decision").length;
   const evidenceCount = nodes.length - decisionCount;
@@ -155,8 +138,6 @@ export function GraphOverlay({
             <GraphCanvas
               nodes={nodes}
               edges={edges}
-              window={windowStart ?? defaultStart}
-              onWindow={setWindowStart}
               selectedId={selection?.node.id ?? null}
               onSelect={setSelection}
             />
@@ -204,9 +185,10 @@ export function GraphOverlay({
             <EvidenceRail selection={selection} />
           ) : mode === "spine" ? (
             <p className="text-xs text-muted-foreground">
-              Select a node to inspect its evidence trail. Boxes on the line are
-              decisions in time order; anything hanging off a box is its
-              evidence — supports below, counter-claims above.
+              Select a decision or evidence row to inspect its trail here. Cards
+              are decisions in time order; ⊕ rows support a decision, ⊖ rows
+              contest it. The strip up top is the whole deliberation — amber
+              ticks are contested; click to jump.
             </p>
           ) : (
             <p className="text-xs text-muted-foreground">

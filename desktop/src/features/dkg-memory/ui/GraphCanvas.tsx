@@ -1,26 +1,39 @@
-// Deterministic graph canvas for a subgraph lens — the on-demand graph view
-// the deliberation settled: time-ordered decision SPINE on the horizontal
-// axis, one hop of evidence hanging OFF the spine (supports below,
-// counter-claims above, dashed + labeled — never color alone), deterministic
-// positions (no physics), labels only on selection. Scale picks the layout:
-// this canvas IS the small-subgraph direct-DAG mode; cluster-map first paint
-// for channel-wide scale arrives with the Knowledge section.
-import { useMemo } from "react";
+// Traces view — the readable timeline (v2, per the "readable timeline"
+// proposal deliberated in the Web of Trust channel; round-2 refinements
+// from UT Voice / OpenClaw / Hermes folded in).
+//
+// The v1 fixed-geometry SVG (156×32px boxes, 24-char labels, 7-slot window)
+// showed THAT decisions existed but not WHAT they were. v2 keeps the exact
+// information design — time-ordered decisions, supports vs counter-claims,
+// contested flags, WM/SWM/VM layer dots — and changes only the medium.
+// Deliberated invariants:
+//  - no title hard-truncation (2-line clamp + expand);
+//  - disagreement is visible WITHOUT expansion — the first counter-claim
+//    renders inline even in compact density, never just a count;
+//  - quiet gaps stay visible: the mini-map is true-time (clamped so dense
+//    regions stay clickable) and the list carries gap separators;
+//  - contested-only filtering keeps dim neighbor anchors so a dispute
+//    never loses its place in the sequence;
+//  - hovering a card highlights its mini-map tick (and vice versa).
+// Read-only: clicking selects and focuses the evidence rail; it never
+// navigates.
+import { useMemo, useRef, useState } from "react";
 import type { GraphEdge, GraphNode } from "../api";
 
 const LAYER_DOT = {
-  WM: "fill-slate-400",
-  SWM: "fill-amber-400",
-  VM: "fill-green-500",
+  WM: "bg-slate-400",
+  SWM: "bg-amber-400",
+  VM: "bg-green-500",
 } as const;
 
-const SLOT_W = 190;
-const SPINE_Y = 150;
-const EVIDENCE_Y0 = 230;
-const EVIDENCE_DY = 48;
-const CONTRA_Y0 = 70;
+/** Retained for compatibility; the timeline scrolls instead of windowing. */
 export const MAX_SPINE = 7;
-const MAX_EVIDENCE_PER = 4;
+
+/** List gaps ≥ this many seconds get a visible separator. */
+const GAP_SEPARATOR_S = 6 * 3600;
+/** Mini-map tick spacing bounds (px in viewBox units). */
+const TICK_MIN_GAP = 6;
+const TICK_MAX_GAP = 40;
 
 export interface GraphSelection {
   node: GraphNode;
@@ -30,20 +43,43 @@ export interface GraphSelection {
 interface Props {
   nodes: GraphNode[];
   edges: GraphEdge[];
-  window: number; // spine window start index
-  onWindow: (start: number) => void;
+  /** Ignored in v2 (scroll replaces windowing); kept for call-site compat. */
+  window?: number;
+  onWindow?: (start: number) => void;
   selectedId: string | null;
   onSelect: (sel: GraphSelection | null) => void;
 }
 
-export function GraphCanvas({
-  nodes,
-  edges,
-  window: winStart,
-  onWindow,
-  selectedId,
-  onSelect,
-}: Props) {
+function fmtTime(at: number | null): string {
+  if (!at) return "—";
+  const d = new Date(at * 1000);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return sameDay
+    ? hm
+    : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${hm}`;
+}
+
+function fmtGap(seconds: number): string {
+  const h = Math.round(seconds / 3600);
+  if (h < 48) return `${h} h quiet`;
+  return `${Math.round(h / 24)} days quiet`;
+}
+
+type Row =
+  | { kind: "decision"; node: GraphNode; anchor: boolean }
+  | { kind: "gap"; id: string; label: string };
+
+export function GraphCanvas({ nodes, edges, selectedId, onSelect }: Props) {
+  const [density, setDensity] = useState<"comfortable" | "compact">(
+    "comfortable",
+  );
+  const [contestedOnly, setContestedOnly] = useState(false);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [hoverId, setHoverId] = useState<string | null>(null);
+  const cardRefs = useRef<Map<string, HTMLLIElement>>(new Map());
+
+  // Identical layout computation to v1 — the semantics are the contract.
   const layout = useMemo(() => {
     const byId = new Map(nodes.map((n) => [n.id, n]));
     const spine = nodes
@@ -53,8 +89,6 @@ export function GraphCanvas({
           (a.at ?? Number.MAX_SAFE_INTEGER) -
             (b.at ?? Number.MAX_SAFE_INTEGER) || a.label.localeCompare(b.label),
       );
-    // Evidence grouped under the first decision it supports; counter-claims
-    // grouped above the decision they contradict.
     const under = new Map<string, GraphNode[]>();
     const over = new Map<string, GraphNode[]>();
     const linked = new Set<string>();
@@ -79,19 +113,70 @@ export function GraphCanvas({
   }, [nodes, edges]);
 
   const { spine, under, over, unlinked } = layout;
-  // First paint: coarsest view that shows at least one contested decision;
-  // fallback: the latest window (consensus rule + UT Voice's fallback).
-  const start = Math.max(0, Math.min(winStart, spine.length - MAX_SPINE));
-  const visible = spine.slice(start, start + MAX_SPINE);
-  const width = Math.max(visible.length, 1) * SLOT_W + 80;
-  const maxUnder = Math.max(
-    0,
-    ...visible.map((d) =>
-      Math.min(under.get(d.id)?.length ?? 0, MAX_EVIDENCE_PER),
-    ),
-  );
-  const unlinkedY = EVIDENCE_Y0 + maxUnder * EVIDENCE_DY + 40;
-  const height = unlinkedY + (unlinked.length > 0 ? 70 : 10);
+
+  // True-time mini-map positions: proportional to elapsed time, clamped so
+  // one long silence never compresses dense regions below clickability
+  // (OpenClaw's guardrail). Falls back to even spacing when times are absent.
+  const ticks = useMemo(() => {
+    const xs: number[] = [];
+    let x = 1;
+    for (let i = 0; i < spine.length; i++) {
+      if (i > 0) {
+        const prev = spine[i - 1].at;
+        const cur = spine[i].at;
+        let gap = TICK_MIN_GAP;
+        if (prev && cur && cur > prev) {
+          // 1h ≈ 2px beyond the minimum, clamped.
+          gap = Math.min(
+            TICK_MAX_GAP,
+            Math.max(TICK_MIN_GAP, TICK_MIN_GAP + ((cur - prev) / 3600) * 2),
+          );
+        }
+        x += gap;
+      }
+      xs.push(x);
+    }
+    return { xs, width: Math.max((xs[xs.length - 1] ?? 0) + 6, 60) };
+  }, [spine]);
+
+  // Visible rows: full list, or contested + dim neighbor anchors; with gap
+  // separators wherever consecutive decisions are far apart in time.
+  const rows = useMemo<Row[]>(() => {
+    let picked: { node: GraphNode; anchor: boolean }[];
+    if (!contestedOnly) {
+      picked = spine.map((n) => ({ node: n, anchor: false }));
+    } else {
+      const keep = new Map<string, boolean>(); // id -> isAnchor
+      spine.forEach((n, i) => {
+        if ((n.contested ?? 0) > 0) {
+          keep.set(n.id, false);
+          const prev = spine[i - 1];
+          const next = spine[i + 1];
+          if (prev && !keep.has(prev.id)) keep.set(prev.id, true);
+          if (next && !keep.has(next.id)) keep.set(next.id, true);
+        }
+      });
+      picked = spine
+        .filter((n) => keep.has(n.id))
+        .map((n) => ({ node: n, anchor: keep.get(n.id) === true }));
+    }
+    const out: Row[] = [];
+    for (let i = 0; i < picked.length; i++) {
+      if (i > 0) {
+        const prev = picked[i - 1].node.at;
+        const cur = picked[i].node.at;
+        if (prev && cur && cur - prev >= GAP_SEPARATOR_S) {
+          out.push({
+            kind: "gap",
+            id: `gap-${picked[i].node.id}`,
+            label: fmtGap(cur - prev),
+          });
+        }
+      }
+      out.push({ kind: "decision", ...picked[i] });
+    }
+    return out;
+  }, [spine, contestedOnly]);
 
   const select = (node: GraphNode) => {
     const neighbors: { rel: string; node: GraphNode }[] = [];
@@ -106,300 +191,271 @@ export function GraphCanvas({
     onSelect({ node, neighbors });
   };
 
-  const xOf = (i: number) => 60 + i * SLOT_W + SLOT_W / 2;
+  const jumpTo = (id: string) => {
+    cardRefs.current.get(id)?.scrollIntoView({ block: "center" });
+  };
+
+  const toggleExpand = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+
+  if (spine.length === 0 && unlinked.length === 0) {
+    return (
+      <div className="p-6 text-sm text-muted-foreground">
+        No decisions or evidence in this subgraph yet.
+      </div>
+    );
+  }
+
+  const compact = density === "compact";
 
   return (
-    <div className="h-full w-full overflow-auto">
-      <svg
-        width={width}
-        height={height}
-        role="img"
-        aria-label="Decision traces graph"
-        className="min-h-full"
-      >
-        {/* time axis = the spine line */}
-        {visible.length > 0 && (
-          <line
-            x1={30}
-            y1={SPINE_Y}
-            x2={width - 30}
-            y2={SPINE_Y}
-            className="stroke-border"
-            strokeWidth={2}
-          />
-        )}
-        {start > 0 && (
-          <SpineFold
-            x={34}
-            y={SPINE_Y}
-            label={`‹ +${start} earlier`}
-            onClick={() => onWindow(Math.max(0, start - MAX_SPINE))}
-          />
-        )}
-        {start + MAX_SPINE < spine.length && (
-          <SpineFold
-            x={width - 44}
-            y={SPINE_Y}
-            anchor="end"
-            label={`+${spine.length - start - MAX_SPINE} later ›`}
-            onClick={() => onWindow(start + MAX_SPINE)}
-          />
-        )}
-
-        {visible.map((d, i) => {
-          const x = xOf(i);
-          const evidence = (under.get(d.id) ?? []).slice(0, MAX_EVIDENCE_PER);
-          const extra = (under.get(d.id)?.length ?? 0) - evidence.length;
-          const counters = over.get(d.id) ?? [];
-          const contested = (d.contested ?? 0) > 0 || counters.length > 0;
-          return (
-            <g key={d.id}>
-              {/* evidence below: supports */}
-              {evidence.map((n, j) => {
-                const y = EVIDENCE_Y0 + j * EVIDENCE_DY;
-                return (
-                  <g key={n.id}>
-                    <line
-                      x1={x}
-                      y1={SPINE_Y + 16}
-                      x2={x}
-                      y2={y - 14}
-                      className="stroke-border"
-                      strokeWidth={1}
-                    />
-                    <EvidenceNode
-                      node={n}
-                      x={x}
-                      y={y}
-                      selected={selectedId === n.id}
-                      onClick={() => select(n)}
-                    />
-                  </g>
-                );
-              })}
-              {extra > 0 && (
-                <text
-                  x={x}
-                  y={EVIDENCE_Y0 + evidence.length * EVIDENCE_DY}
-                  textAnchor="middle"
-                  className="fill-muted-foreground text-2xs"
-                >
-                  +{extra} more
-                </text>
-              )}
-              {/* counter-claims above: dashed + labeled relation */}
-              {counters.slice(0, 2).map((n, j) => {
-                const y = CONTRA_Y0 - j * EVIDENCE_DY;
-                return (
-                  <g key={n.id}>
-                    <line
-                      x1={x}
-                      y1={y + 14}
-                      x2={x}
-                      y2={SPINE_Y - 16}
-                      className="stroke-amber-500"
-                      strokeWidth={1.5}
-                      strokeDasharray="4 3"
-                    />
-                    <text
-                      x={x + 6}
-                      y={(y + SPINE_Y) / 2}
-                      className="fill-amber-500 text-3xs"
-                    >
-                      counter-claim
-                    </text>
-                    <EvidenceNode
-                      node={n}
-                      x={x}
-                      y={y}
-                      counter
-                      selected={selectedId === n.id}
-                      onClick={() => select(n)}
-                    />
-                  </g>
-                );
-              })}
-              {/* decision on the spine */}
-              {/* biome-ignore lint/a11y/useSemanticElements: SVG interactive node — <button> is invalid inside <svg> */}
-              <g
+    <div
+      className="flex h-full min-h-0 flex-col"
+      aria-label="Decision traces timeline"
+    >
+      {/* True-time mini-map + controls */}
+      <div className="flex items-center gap-3 border-b border-border px-3 py-1.5">
+        {/* biome-ignore lint/a11y/noSvgWithoutTitle: navigation strip; ticks carry titles */}
+        <svg
+          className="h-5 min-w-0 flex-1"
+          viewBox={`0 0 ${ticks.width} 20`}
+          preserveAspectRatio="none"
+          role="img"
+        >
+          {spine.map((d, i) => {
+            const contested = (d.contested ?? 0) > 0;
+            const active = d.id === selectedId || d.id === hoverId;
+            return (
+              // biome-ignore lint/a11y/useSemanticElements: SVG tick — button invalid inside svg
+              <rect
+                key={d.id}
                 role="button"
-                tabIndex={0}
-                onClick={() => select(d)}
-                onKeyDown={(e) => e.key === "Enter" && select(d)}
-                className="cursor-pointer"
+                tabIndex={-1}
+                x={ticks.xs[i]}
+                y={contested ? 2 : 6}
+                width={4}
+                height={contested ? 16 : 8}
+                rx={1}
+                className={`cursor-pointer ${
+                  active
+                    ? "fill-primary"
+                    : contested
+                      ? "fill-amber-500"
+                      : "fill-muted-foreground/40 hover:fill-muted-foreground"
+                }`}
+                onClick={() => jumpTo(d.id)}
+                onMouseEnter={() => setHoverId(d.id)}
+                onMouseLeave={() => setHoverId(null)}
               >
-                <rect
-                  x={x - 78}
-                  y={SPINE_Y - 16}
-                  width={156}
-                  height={32}
-                  rx={6}
-                  className={`${
-                    selectedId === d.id
-                      ? "fill-primary/15 stroke-primary"
-                      : "fill-muted stroke-foreground/60"
-                  } ${contested ? "stroke-amber-500" : ""}`}
-                  strokeWidth={contested ? 2 : 1.5}
-                />
                 <title>{d.label}</title>
-                {d.layer && (
-                  <circle
-                    cx={x + 72}
-                    cy={SPINE_Y - 10}
-                    r={3}
-                    className={LAYER_DOT[d.layer]}
-                  />
-                )}
-                <text
-                  x={x}
-                  y={SPINE_Y + 4}
-                  textAnchor="middle"
-                  className="fill-foreground text-2xs"
-                >
-                  {ellipsize(d.label, 24)}
-                </text>
-                {contested && (
-                  <text
-                    x={x}
-                    y={SPINE_Y - 22}
-                    textAnchor="middle"
-                    className="fill-amber-500 text-3xs font-medium"
-                  >
-                    CONTESTED{d.contested ? ` (${d.contested})` : ""}
-                  </text>
-                )}
-              </g>
-            </g>
-          );
-        })}
+              </rect>
+            );
+          })}
+        </svg>
+        <label className="flex items-center gap-1 text-2xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={contestedOnly}
+            onChange={(e) => setContestedOnly(e.target.checked)}
+            className="h-3 w-3"
+          />
+          contested only
+        </label>
+        <button
+          type="button"
+          onClick={() => setDensity(compact ? "comfortable" : "compact")}
+          className="rounded border border-border px-1.5 py-0.5 text-2xs text-muted-foreground hover:bg-muted"
+          title="Toggle density"
+        >
+          {compact ? "comfortable" : "compact"}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const last = rows.filter((r) => r.kind === "decision").pop();
+            if (last && last.kind === "decision") jumpTo(last.node.id);
+          }}
+          className="rounded border border-border px-1.5 py-0.5 text-2xs text-muted-foreground hover:bg-muted"
+        >
+          latest ↓
+        </button>
+      </div>
 
-        {/* unlinked evidence lane */}
-        {unlinked.length > 0 && (
-          <g>
-            <text
-              x={40}
-              y={unlinkedY - 12}
-              className="fill-muted-foreground text-2xs"
-            >
-              evidence not yet feeding a decision
-            </text>
-            {unlinked.slice(0, 12).map((n, i) => (
-              <EvidenceNode
-                key={n.id}
-                node={n}
-                x={60 + i * 52}
-                y={unlinkedY + 16}
-                selected={selectedId === n.id}
-                onClick={() => select(n)}
-              />
-            ))}
-            {unlinked.length > 12 && (
-              <text
-                x={60 + 12 * 52}
-                y={unlinkedY + 20}
-                className="fill-muted-foreground text-2xs"
+      {/* The timeline */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <ol className="mx-auto max-w-2xl space-y-0 px-4 py-3">
+          {rows.map((row) => {
+            if (row.kind === "gap") {
+              return (
+                <li
+                  key={row.id}
+                  className="relative border-l-2 border-dashed border-border py-1 pl-4"
+                >
+                  <span className="text-2xs italic text-muted-foreground">
+                    · {row.label} ·
+                  </span>
+                </li>
+              );
+            }
+            const d = row.node;
+            const contested = (d.contested ?? 0) > 0;
+            const supports = under.get(d.id) ?? [];
+            const counters = over.get(d.id) ?? [];
+            const isSelected = selectedId === d.id;
+            const isExpanded = expanded.has(d.id);
+            // Progressive disclosure (Hermes): first counter always inline;
+            // rest behind expansion. Supports show fully in comfortable,
+            // count-only in compact.
+            const inlineCounters =
+              isExpanded || !compact ? counters : counters.slice(0, 1);
+            const hiddenCounters = counters.length - inlineCounters.length;
+            const inlineSupports = isExpanded || !compact ? supports : [];
+            return (
+              <li
+                key={d.id}
+                ref={(el) => {
+                  if (el) cardRefs.current.set(d.id, el);
+                  else cardRefs.current.delete(d.id);
+                }}
+                data-testid="traces-card"
+                className={`relative border-l-2 border-border pb-1 pl-4 last:pb-3 ${
+                  row.anchor ? "opacity-50" : ""
+                }`}
+                onMouseEnter={() => setHoverId(d.id)}
+                onMouseLeave={() => setHoverId(null)}
               >
-                +{unlinked.length - 12}
-              </text>
-            )}
-          </g>
+                <span
+                  className={`absolute top-3 h-2.5 w-2.5 rounded-full ${contested ? "bg-amber-500" : "bg-muted-foreground/60"}`}
+                  style={{ left: "-5.5px" }}
+                />
+                <div
+                  className={`my-1 rounded-md border px-3 ${compact ? "py-1.5" : "py-2"} ${
+                    isSelected
+                      ? "border-primary bg-primary/5"
+                      : contested
+                        ? "border-amber-500/60 bg-card"
+                        : hoverId === d.id
+                          ? "border-foreground/30 bg-card"
+                          : "border-border bg-card"
+                  }`}
+                >
+                  <div className="mb-0.5 flex items-center gap-2 text-2xs text-muted-foreground">
+                    <span className="tabular-nums">{fmtTime(d.at)}</span>
+                    {d.layer && (
+                      <span className="flex items-center gap-1">
+                        <span
+                          className={`h-1.5 w-1.5 rounded-full ${LAYER_DOT[d.layer]}`}
+                        />
+                        {d.layer}
+                      </span>
+                    )}
+                    {row.anchor && <span className="italic">context</span>}
+                    {contested && (
+                      <span className="rounded bg-amber-500/15 px-1 font-medium text-amber-600 dark:text-amber-400">
+                        CONTESTED{d.contested ? ` (${d.contested})` : ""}
+                      </span>
+                    )}
+                    <span className="ml-auto">
+                      {counters.length > 0 && `⊖ ${counters.length} · `}
+                      {supports.length > 0 && `⊕ ${supports.length}`}
+                    </span>
+                  </div>
+                  <div className="flex items-start gap-1">
+                    <button
+                      type="button"
+                      onClick={() => select(d)}
+                      className={`min-w-0 flex-1 text-left text-sm text-foreground hover:text-primary ${
+                        isExpanded ? "" : "line-clamp-2"
+                      }`}
+                      title={isExpanded ? undefined : d.label}
+                    >
+                      {d.label}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleExpand(d.id)}
+                      className="shrink-0 rounded px-1 text-2xs text-muted-foreground hover:bg-muted"
+                      aria-label={isExpanded ? "Collapse" : "Expand"}
+                    >
+                      {isExpanded ? "▴" : "▾"}
+                    </button>
+                  </div>
+                  {(inlineCounters.length > 0 || inlineSupports.length > 0) && (
+                    <ul className="mt-1.5 space-y-0.5 border-t border-border/60 pt-1.5">
+                      {inlineCounters.map((n) => (
+                        <li key={`c-${n.id}`}>
+                          <button
+                            type="button"
+                            onClick={() => select(n)}
+                            className="w-full truncate text-left text-xs text-red-600/90 hover:underline dark:text-red-400/90"
+                            title={n.label}
+                          >
+                            ⊖ {n.label}
+                          </button>
+                        </li>
+                      ))}
+                      {hiddenCounters > 0 && (
+                        <li>
+                          <button
+                            type="button"
+                            onClick={() => toggleExpand(d.id)}
+                            className="text-left text-2xs text-red-600/70 hover:underline dark:text-red-400/70"
+                          >
+                            +{hiddenCounters} more counter-claim
+                            {hiddenCounters > 1 ? "s" : ""}
+                          </button>
+                        </li>
+                      )}
+                      {inlineSupports.map((n) => (
+                        <li key={`s-${n.id}`}>
+                          <button
+                            type="button"
+                            onClick={() => select(n)}
+                            className="w-full truncate text-left text-xs text-muted-foreground hover:text-foreground hover:underline"
+                            title={n.label}
+                          >
+                            ⊕ {n.label}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+
+        {unlinked.length > 0 && !contestedOnly && (
+          <div className="mx-auto max-w-2xl px-4 pb-4">
+            <p className="mb-1 text-2xs text-muted-foreground">
+              evidence not yet feeding a decision ({unlinked.length})
+            </p>
+            <div className="flex flex-wrap gap-1">
+              {unlinked.slice(0, 24).map((n) => (
+                <button
+                  key={n.id}
+                  type="button"
+                  onClick={() => select(n)}
+                  title={n.label}
+                  className="max-w-56 truncate rounded-full border border-border bg-muted/40 px-2 py-0.5 text-2xs hover:bg-muted"
+                >
+                  {n.label}
+                </button>
+              ))}
+              {unlinked.length > 24 && (
+                <span className="text-2xs text-muted-foreground">
+                  +{unlinked.length - 24}
+                </span>
+              )}
+            </div>
+          </div>
         )}
-      </svg>
+      </div>
     </div>
   );
-}
-
-function EvidenceNode({
-  node,
-  x,
-  y,
-  counter,
-  selected,
-  onClick,
-}: {
-  node: GraphNode;
-  x: number;
-  y: number;
-  counter?: boolean;
-  selected: boolean;
-  onClick: () => void;
-}) {
-  const stroke = selected
-    ? "stroke-primary"
-    : counter
-      ? "stroke-amber-500"
-      : "stroke-foreground/50";
-  const fill = selected ? "fill-primary/20" : "fill-muted";
-  return (
-    // biome-ignore lint/a11y/useSemanticElements: SVG interactive node — <button> is invalid inside <svg>
-    <g
-      role="button"
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => e.key === "Enter" && onClick()}
-      className="cursor-pointer"
-    >
-      <title>{node.label}</title>
-      {node.layer && (
-        <circle
-          cx={x + 12}
-          cy={y - 10}
-          r={3}
-          className={LAYER_DOT[node.layer]}
-        />
-      )}
-      {node.kind === "commit" ? (
-        <rect
-          x={x - 11}
-          y={y - 11}
-          width={22}
-          height={22}
-          className={`${fill} ${stroke}`}
-          strokeWidth={1.5}
-        />
-      ) : (
-        <circle
-          cx={x}
-          cy={y}
-          r={12}
-          className={`${fill} ${stroke}`}
-          strokeWidth={1.5}
-        />
-      )}
-    </g>
-  );
-}
-
-function SpineFold({
-  x,
-  y,
-  label,
-  anchor,
-  onClick,
-}: {
-  x: number;
-  y: number;
-  label: string;
-  anchor?: "end";
-  onClick: () => void;
-}) {
-  return (
-    // biome-ignore lint/a11y/useSemanticElements: SVG interactive node — <button> is invalid inside <svg>
-    <text
-      x={x}
-      y={y - 24}
-      textAnchor={anchor ?? "start"}
-      role="button"
-      tabIndex={0}
-      onClick={onClick}
-      onKeyDown={(e) => e.key === "Enter" && onClick()}
-      className="cursor-pointer fill-primary text-2xs hover:underline"
-    >
-      {label}
-    </text>
-  );
-}
-
-function ellipsize(s: string, n: number): string {
-  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
 }

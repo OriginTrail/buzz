@@ -124,6 +124,9 @@ test.describe("dkg memory panel demo", () => {
     const overlay = page.getByTestId("dkg-graph-overlay");
     await expect(overlay).toBeVisible({ timeout: 20_000 });
     await expect(overlay.getByText("Traces")).toBeVisible();
+    await expect(overlay.getByTestId("traces-card").first()).toBeVisible({
+      timeout: 25_000,
+    });
     await waitForAnimations(page);
     await overlay.screenshot({ path: `${SHOTS}/08-traces-view.png` });
     // Switch to the node-parity Graph mode.
