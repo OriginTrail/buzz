@@ -11,9 +11,12 @@ const EDGE_NODE_GUIDE =
 export function NodeUiResolve({
   cg,
   layer,
+  entity,
 }: {
   cg: string;
   layer?: "WM" | "SWM" | "VM" | null;
+  /** Entity URI to focus inside the CG tab (preferred over a layer tab). */
+  entity?: string | null;
 }) {
   const [hint, setHint] = useState(false);
   const source = explorerSource();
@@ -22,7 +25,7 @@ export function NodeUiResolve({
   if (source === "local") {
     return (
       <a
-        href={nodeUiDeepLink(cg, lc)}
+        href={nodeUiDeepLink(cg, entity ? { entity } : { layer: lc })}
         target="_blank"
         rel="noreferrer"
         className="inline-flex items-center gap-1 text-2xs text-primary hover:underline"

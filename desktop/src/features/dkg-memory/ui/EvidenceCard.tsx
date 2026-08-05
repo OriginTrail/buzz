@@ -131,7 +131,11 @@ function EnvelopeBody({ env }: { env: EvidenceEnvelope }) {
         </p>
       )}
       {env.replay?.cg && (
-        <NodeUiResolve cg={env.replay.cg} layer={env.memoryLayer} />
+        <NodeUiResolve
+          cg={env.replay.cg}
+          layer={env.memoryLayer}
+          entity={env.claimId}
+        />
       )}
       <button
         type="button"

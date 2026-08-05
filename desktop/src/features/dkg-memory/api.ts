@@ -259,13 +259,18 @@ export async function fetchEvidence(
   return (await res.json()) as EvidenceEnvelope;
 }
 
-/** Deep link into the patched edge-node UI, landed on this CG. */
+/**
+ * Deep link into the patched edge-node UI, landed on this CG. With an
+ * entity URI the UI opens the single CG tab and focuses that entity inside
+ * it (v10:open-entity); with only a layer it opens the layer tab.
+ */
 export function nodeUiDeepLink(
   cg: string,
-  layer?: "wm" | "swm" | "vm",
+  opts?: { layer?: "wm" | "swm" | "vm"; entity?: string },
 ): string {
   const base = `http://127.0.0.1:9200/ui/?cg=${encodeURIComponent(cg)}`;
-  return layer ? `${base}&layer=${layer}` : base;
+  if (opts?.entity) return `${base}&entity=${encodeURIComponent(opts.entity)}`;
+  return opts?.layer ? `${base}&layer=${opts.layer}` : base;
 }
 
 // ── C-recommendation: relay-backed discovery fallback ────────────────────────

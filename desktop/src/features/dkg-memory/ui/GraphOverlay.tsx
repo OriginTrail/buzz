@@ -244,7 +244,7 @@ function EvidenceRail({
           commit {node.commit}
         </p>
       )}
-      <NodeUiResolve cg={cg} layer={node.layer} />
+      <NodeUiResolve cg={cg} layer={node.layer} entity={node.id} />
       {neighbors.length > 0 && (
         <section>
           <h4 className="mb-1 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
