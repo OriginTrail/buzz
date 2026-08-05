@@ -129,6 +129,16 @@ test.describe("dkg memory panel demo", () => {
     });
     await waitForAnimations(page);
     await overlay.screenshot({ path: `${SHOTS}/08-traces-view.png` });
+    // Selecting a decision surfaces the node-UI resolve affordance (local mode).
+    await overlay
+      .getByTestId("traces-card")
+      .first()
+      .locator("button")
+      .first()
+      .click();
+    await expect(
+      overlay.getByText(/resolve in your node ui/i),
+    ).toBeVisible({ timeout: 10_000 });
     // Switch to the node-parity Graph mode.
     await overlay.getByTestId("dkg-topology-toggle").click();
     await expect(

@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 import { useSubgraphGraph } from "../hooks";
 import { TopologyView } from "../topology/TopologyView";
 import { GraphCanvas, type GraphSelection } from "./GraphCanvas";
+import { NodeUiResolve } from "./NodeUiResolve";
 
 const LAYER_META = {
   WM: { label: "Draft — only on this node", dot: "bg-slate-400" },
@@ -182,7 +183,7 @@ export function GraphOverlay({
 
         <aside className="w-80 shrink-0 overflow-y-auto border-l border-border p-3">
           {selection ? (
-            <EvidenceRail selection={selection} />
+            <EvidenceRail selection={selection} cg={cg} />
           ) : mode === "spine" ? (
             <p className="text-xs text-muted-foreground">
               Select a decision or evidence row to inspect its trail here. Cards
@@ -204,7 +205,13 @@ export function GraphOverlay({
   );
 }
 
-function EvidenceRail({ selection }: { selection: GraphSelection }) {
+function EvidenceRail({
+  selection,
+  cg,
+}: {
+  selection: GraphSelection;
+  cg: string;
+}) {
   const { node, neighbors } = selection;
   return (
     <div className="space-y-3">
@@ -237,6 +244,7 @@ function EvidenceRail({ selection }: { selection: GraphSelection }) {
           commit {node.commit}
         </p>
       )}
+      <NodeUiResolve cg={cg} layer={node.layer} />
       {neighbors.length > 0 && (
         <section>
           <h4 className="mb-1 text-2xs font-medium uppercase tracking-wide text-muted-foreground">

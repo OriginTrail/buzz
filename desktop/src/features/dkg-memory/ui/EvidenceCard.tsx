@@ -6,6 +6,7 @@
 import { useState } from "react";
 import type { EvidenceEnvelope } from "../api";
 import { useEvidence, useProfileNames } from "../hooks";
+import { NodeUiResolve } from "./NodeUiResolve";
 
 const LAYER_HUMAN = {
   WM: "Draft — only on this node",
@@ -128,6 +129,9 @@ function EnvelopeBody({ env }: { env: EvidenceEnvelope }) {
         <p className="break-all font-mono text-3xs text-muted-foreground">
           UAL {env.receiptUal}
         </p>
+      )}
+      {env.replay?.cg && (
+        <NodeUiResolve cg={env.replay.cg} layer={env.memoryLayer} />
       )}
       <button
         type="button"
