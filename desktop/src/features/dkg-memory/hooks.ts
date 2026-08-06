@@ -14,23 +14,29 @@ export function useChannelContextGraph(channelId: string | null) {
   });
 }
 
-export function useChannelMemory(cg: string | null | undefined) {
+export function useChannelMemory(
+  channelId: string | null,
+  cg: string | null | undefined,
+  bindingResolved: boolean,
+) {
   return useQuery({
-    queryKey: ["dkg-memory", "memory", cg],
-    queryFn: () => fetchChannelMemory(cg as string),
-    enabled: Boolean(cg),
+    queryKey: ["dkg-memory", "memory", channelId, cg],
+    queryFn: () => fetchChannelMemory(channelId as string, cg ?? null),
+    enabled: Boolean(channelId) && bindingResolved,
     refetchInterval: 30 * 1000,
   });
 }
 
 export function useContributorTrail(
+  channelId: string | null,
   cg: string | null | undefined,
   pubkey: string | null,
 ) {
   return useQuery({
-    queryKey: ["dkg-memory", "trail", cg, pubkey],
-    queryFn: () => fetchContributorTrail(cg as string, pubkey as string),
-    enabled: Boolean(cg && pubkey),
+    queryKey: ["dkg-memory", "trail", channelId, cg, pubkey],
+    queryFn: () =>
+      fetchContributorTrail(channelId as string, cg ?? null, pubkey as string),
+    enabled: Boolean(channelId && pubkey),
   });
 }
 
@@ -41,11 +47,16 @@ import {
   fetchSubgraphGraph,
 } from "./api";
 
-export function useEvidence(cg: string | null | undefined, uri: string | null) {
+export function useEvidence(
+  channelId: string | null,
+  cg: string | null | undefined,
+  uri: string | null,
+) {
   return useQuery({
-    queryKey: ["dkg-memory", "evidence", cg, uri],
-    queryFn: () => fetchEvidence(cg as string, uri as string),
-    enabled: Boolean(cg && uri),
+    queryKey: ["dkg-memory", "evidence", channelId, cg, uri],
+    queryFn: () =>
+      fetchEvidence(channelId as string, cg ?? null, uri as string),
+    enabled: Boolean(channelId && uri),
     staleTime: 60 * 1000,
   });
 }
@@ -60,13 +71,15 @@ export function useProfileNames(pubkeys: string[]) {
 }
 
 export function useSubgraphGraph(
+  channelId: string | null,
   cg: string | null | undefined,
   name: string | null,
 ) {
   return useQuery({
-    queryKey: ["dkg-memory", "graph", cg, name],
-    queryFn: () => fetchSubgraphGraph(cg as string, name as string),
-    enabled: Boolean(cg && name),
+    queryKey: ["dkg-memory", "graph", channelId, cg, name],
+    queryFn: () =>
+      fetchSubgraphGraph(channelId as string, cg ?? null, name as string),
+    enabled: Boolean(channelId && name),
     staleTime: 30 * 1000,
   });
 }

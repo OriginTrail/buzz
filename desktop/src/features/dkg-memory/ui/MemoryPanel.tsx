@@ -38,12 +38,13 @@ function shortPk(pk: string): string {
 
 export function MemoryPanel({ channelId }: { channelId: string }) {
   const cgQuery = useChannelContextGraph(channelId);
-  const cg = cgQuery.data ?? null;
-  const memory = useChannelMemory(cg);
+  const receiptCg = cgQuery.data ?? null;
+  const memory = useChannelMemory(channelId, receiptCg, !cgQuery.isLoading);
+  const cg = memory.data?.cg ?? receiptCg;
   const [trailPubkey, setTrailPubkey] = useState<string | null>(null);
   const [graphSubgraph, setGraphSubgraph] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const trail = useContributorTrail(cg, trailPubkey);
+  const trail = useContributorTrail(channelId, cg, trailPubkey);
   const gateFailed =
     Boolean(memory.data && memory.data.gate !== "ok") || memory.isError;
   const discovery = useDiscoveryFallback(channelId, gateFailed);
@@ -70,21 +71,11 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
   if (cgQuery.isLoading) {
     return <PanelShell title="Memory">Resolving channel binding…</PanelShell>;
   }
-  if (!cg) {
-    return (
-      <PanelShell title="Memory">
-        <p className="text-sm text-muted-foreground">
-          This channel is not bound to a Context Graph yet. Pin a thread or use{" "}
-          <code>@dkg distill</code> once the knowledge daemon is attached.
-        </p>
-      </PanelShell>
-    );
-  }
   if (memory.isLoading) {
-    return <PanelShell title="Memory">Reading your edge node…</PanelShell>;
+    return <PanelShell title="Memory">Reading channel memory…</PanelShell>;
   }
   const data = memory.data;
-  if (!data || data.gate !== "ok") {
+  if (data?.gate !== "ok") {
     return (
       <PanelShell title="Memory">
         <div className="mb-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs">
@@ -129,7 +120,7 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
     <PanelShell
       title="Memory"
       action={
-        explorerSource() === "local" ? (
+        explorerSource() === "local" && cg ? (
           <a
             className="text-xs text-primary hover:underline"
             href={nodeUiDeepLink(cg)}
@@ -143,8 +134,9 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
     >
       {explorerSource() === "gateway" ? (
         <div className="mb-2 rounded-md border border-sky-600/40 bg-sky-600/10 px-2 py-1 text-xs">
-          ✓ Resolved through the community DKG provider — full memory from the
-          community's node. Run your own node to verify independently.
+          ✓ Resolved through the community DKG provider — shared and anchored
+          memory from the community's node. Run your own node to verify
+          independently.
         </div>
       ) : (
         <div className="mb-2 rounded-md border border-green-600/40 bg-green-600/10 px-2 py-1 text-xs">
@@ -221,6 +213,7 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
             Latest decision
           </h4>
           <EvidenceCard
+            channelId={channelId}
             cg={cg}
             uri={latestDecision.uri}
             title={latestDecision.name ?? latestDecision.uri}
@@ -313,6 +306,7 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
       {/* On-demand graph view: full-screen inspection state */}
       {graphSubgraph && (
         <GraphOverlay
+          channelId={channelId}
           cg={cg}
           subgraph={graphSubgraph}
           onClose={() => setGraphSubgraph(null)}
@@ -378,8 +372,8 @@ function PanelShell({
   );
 }
 
-function GateNotice({ gate, cg }: { gate: string; cg: string }) {
-  if (gate === "not-subscribed") {
+function GateNotice({ gate, cg }: { gate: string; cg: string | null }) {
+  if (gate === "not-subscribed" && cg) {
     return (
       <div className="space-y-2 text-sm text-muted-foreground">
         <p>
@@ -398,8 +392,8 @@ function GateNotice({ gate, cg }: { gate: string; cg: string }) {
   return (
     <div className="space-y-2 text-sm text-muted-foreground">
       <p>
-        No DKG edge node is answering locally. Channel memory resolves through{" "}
-        <em>your own</em> node — run one, then reopen this panel.
+        Neither a local DKG edge node nor this community's DKG provider is
+        answering. Run a local node, then reopen this panel.
       </p>
       <pre className="overflow-x-auto rounded bg-muted p-2 text-xs">
         {`mkdir dkg-node && cd dkg-node && npm install dkg@latest

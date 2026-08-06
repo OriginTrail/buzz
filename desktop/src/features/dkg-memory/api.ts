@@ -1,53 +1,17 @@
 // Data access for the Buzz-native DKG memory panel.
 //
-// All graph reads go through the viewer's OWN local explorer/edge node
-// (127.0.0.1:9295 → 127.0.0.1:9200) — the local-first mandate: memory
-// resolves only for viewers whose node participates in the channel's
-// Context Graph. The relay is used solely to discover the channel→CG
-// binding, which the @dkg daemon's receipts carry in-channel.
+// Reads prefer the viewer's own local explorer/edge node, then use the active
+// community relay's authenticated DKG provider. Receipts remain a discovery
+// and display fallback; their Context Graph id is never sent as remote
+// authorization input.
 import { relayClient } from "@/shared/api/relayClient";
+import { queryDkgProvider } from "./provider";
 
-// Local-first with community-gateway fallback (RFC deployment profile 2):
-// the viewer's own explorer/node wins when present; otherwise the panel
-// resolves through the community's gateway node over the tailnet — full
-// fidelity, honestly labeled as gateway-resolved rather than self-verified.
-const LOCAL_EXPLORER = "http://127.0.0.1:9295";
-const GATEWAY_EXPLORER = "https://macbook-pro-8.tailb02f7e.ts.net/wot-explorer";
-
-export type ExplorerSource = "local" | "gateway";
-
-let resolvedExplorer: { url: string; source: ExplorerSource } | null = null;
-
-async function explorer(): Promise<{ url: string; source: ExplorerSource }> {
-  if (resolvedExplorer) return resolvedExplorer;
-  try {
-    const override = localStorage.getItem("dkg-memory-explorer-url");
-    if (override) {
-      resolvedExplorer = {
-        url: override.replace(/\/$/, ""),
-        source: override.includes("127.0.0.1") ? "local" : "gateway",
-      };
-      return resolvedExplorer;
-    }
-  } catch {
-    /* storage unavailable */
-  }
-  try {
-    // Any HTTP response (even an error status) proves a local explorer exists.
-    await fetch(`${LOCAL_EXPLORER}/api/channel-memory?cg=probe`, {
-      signal: AbortSignal.timeout(1500),
-    });
-    resolvedExplorer = { url: LOCAL_EXPLORER, source: "local" };
-  } catch {
-    resolvedExplorer = { url: GATEWAY_EXPLORER, source: "gateway" };
-  }
-  return resolvedExplorer;
-}
-
-/** Which explorer the panel resolved through (null until first fetch). */
-export function explorerSource(): ExplorerSource | null {
-  return resolvedExplorer?.source ?? null;
-}
+export {
+  explorerSource,
+  resetDkgMemoryProvider,
+  type ExplorerSource,
+} from "./provider";
 
 export type MemoryGate = "ok" | "node-missing" | "auth" | "not-subscribed";
 
@@ -127,25 +91,31 @@ export async function deriveContextGraphId(
   return null;
 }
 
-export async function fetchChannelMemory(cg: string): Promise<ChannelMemory> {
-  const { url } = await explorer();
-  const res = await fetch(
-    `${url}/api/channel-memory?cg=${encodeURIComponent(cg)}`,
-  );
-  if (!res.ok) throw new Error(`channel-memory ${res.status}`);
-  return (await res.json()) as ChannelMemory;
+export async function fetchChannelMemory(
+  channelId: string,
+  cg: string | null,
+): Promise<ChannelMemory> {
+  return queryDkgProvider<ChannelMemory, "channel_memory">({
+    channelId,
+    operation: "channel_memory",
+    arguments: {},
+    localPath: cg ? `/api/channel-memory?cg=${encodeURIComponent(cg)}` : null,
+  });
 }
 
 export async function fetchContributorTrail(
-  cg: string,
+  channelId: string,
+  cg: string | null,
   pubkey: string,
 ): Promise<TrailEntry[]> {
-  const { url } = await explorer();
-  const res = await fetch(
-    `${url}/api/contributor-trail?cg=${encodeURIComponent(cg)}&pubkey=${encodeURIComponent(pubkey)}`,
-  );
-  if (!res.ok) throw new Error(`contributor-trail ${res.status}`);
-  return (await res.json()) as TrailEntry[];
+  return queryDkgProvider<TrailEntry[], "contributor_trail">({
+    channelId,
+    operation: "contributor_trail",
+    arguments: { pubkey },
+    localPath: cg
+      ? `/api/contributor-trail?cg=${encodeURIComponent(cg)}&pubkey=${encodeURIComponent(pubkey)}`
+      : null,
+  });
 }
 
 // ── Graph view (per the graph-view deliberation) ────────────────────────────
@@ -179,15 +149,18 @@ export interface SubgraphGraphData {
 }
 
 export async function fetchSubgraphGraph(
-  cg: string,
+  channelId: string,
+  cg: string | null,
   name: string,
 ): Promise<SubgraphGraphData> {
-  const { url } = await explorer();
-  const res = await fetch(
-    `${url}/api/subgraph-graph?cg=${encodeURIComponent(cg)}&name=${encodeURIComponent(name)}`,
-  );
-  if (!res.ok) throw new Error(`subgraph-graph ${res.status}`);
-  return (await res.json()) as SubgraphGraphData;
+  return queryDkgProvider<SubgraphGraphData, "subgraph_graph">({
+    channelId,
+    operation: "subgraph_graph",
+    arguments: { name },
+    localPath: cg
+      ? `/api/subgraph-graph?cg=${encodeURIComponent(cg)}&name=${encodeURIComponent(name)}`
+      : null,
+  });
 }
 
 /**
@@ -248,15 +221,18 @@ export interface EvidenceEnvelope {
 }
 
 export async function fetchEvidence(
-  cg: string,
+  channelId: string,
+  cg: string | null,
   uri: string,
 ): Promise<EvidenceEnvelope> {
-  const { url } = await explorer();
-  const res = await fetch(
-    `${url}/api/evidence?cg=${encodeURIComponent(cg)}&uri=${encodeURIComponent(uri)}`,
-  );
-  if (!res.ok) throw new Error(`evidence ${res.status}`);
-  return (await res.json()) as EvidenceEnvelope;
+  return queryDkgProvider<EvidenceEnvelope, "evidence">({
+    channelId,
+    operation: "evidence",
+    arguments: { uri },
+    localPath: cg
+      ? `/api/evidence?cg=${encodeURIComponent(cg)}&uri=${encodeURIComponent(uri)}`
+      : null,
+  });
 }
 
 /**

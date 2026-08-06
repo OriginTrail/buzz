@@ -187,7 +187,7 @@ test.describe("dkg memory panel demo", () => {
     }, WOT_CG);
     await page.route("http://127.0.0.1:9295/**", (route) => route.abort());
     // Also block the community gateway so pure discovery mode is exercised.
-    await page.route("**/wot-explorer/**", (route) => route.abort());
+    await page.route("**/api/dkg/query", (route) => route.abort());
     await installMockBridge(page);
     await page.goto("/", { waitUntil: "domcontentloaded" });
     await page.getByTestId("channel-engineering").click();

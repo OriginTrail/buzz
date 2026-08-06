@@ -2,6 +2,7 @@
 
 pub mod admin;
 pub mod bridge;
+pub mod dkg_query;
 pub mod events;
 pub mod git;
 pub mod invites;

@@ -15,6 +15,7 @@ import { getOverrides } from "@/shared/features";
 import { resetMediaCaches } from "@/shared/lib/mediaUrl";
 import { resetLinkPreviewMetadataCache } from "@/shared/lib/useResolvedLinkPreviews";
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
+import { resetDkgMemoryProvider } from "@/features/dkg-memory/api";
 import {
   clearAllDrafts,
   initDraftStore,
@@ -73,6 +74,7 @@ function resetCommunityState({
   resetBackgroundMediaUploads();
   clearSearchHitEventCache();
   clearMarkdownNodeCache();
+  resetDkgMemoryProvider();
 }
 
 type CommunityInitResult =

@@ -50,6 +50,32 @@ pub struct JoinPolicyConfig {
 /// WebSocket close-frame delivery after the final delayed cancellation.
 pub const MAX_DRAIN_JITTER_MS: u64 = 20_000;
 
+/// Internal DKG query gateway configuration.
+///
+/// Both the endpoint and bearer token must be present before the public relay
+/// route is installed. The token is intentionally redacted from `Debug` so
+/// dumping relay configuration cannot disclose the integration credential.
+#[derive(Clone)]
+pub struct DkgQueryConfig {
+    /// Exact internal HTTP endpoint that accepts sanitized DKG read requests.
+    pub url: url::Url,
+    /// Bearer credential shared only with the internal integration service.
+    pub bearer_token: String,
+    /// Hard deadline for the complete internal request and response body.
+    pub timeout: Duration,
+}
+
+impl std::fmt::Debug for DkgQueryConfig {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DkgQueryConfig")
+            .field("url", &self.url)
+            .field("bearer_token", &"<redacted>")
+            .field("timeout", &self.timeout)
+            .finish()
+    }
+}
+
 /// Relay runtime configuration, loaded from environment variables.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -277,6 +303,9 @@ pub struct Config {
     /// Hard timeout for one gateway delivery request.
     pub push_gateway_timeout: Duration,
 
+    /// Internal DKG read gateway. Absent means `/api/dkg/query` is not routed.
+    pub dkg_query: Option<DkgQueryConfig>,
+
     /// Optional relay-hosted policy shown on join surfaces. Disabled when no
     /// documents or age attestation are configured.
     pub join_policy: Option<JoinPolicyConfig>,
@@ -306,6 +335,16 @@ fn positive_u64_from_env(name: &str, default: u64) -> Result<u64, ConfigError> {
             .filter(|value| *value > 0)
             .ok_or_else(|| ConfigError::InvalidValue(format!("{name} must be a positive integer"))),
         Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(std::env::VarError::NotUnicode(_)) => Err(ConfigError::InvalidValue(format!(
+            "{name} must be valid Unicode"
+        ))),
+    }
+}
+
+fn optional_unicode_env(name: &str) -> Result<Option<String>, ConfigError> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => Err(ConfigError::InvalidValue(format!(
             "{name} must be valid Unicode"
         ))),
@@ -389,6 +428,85 @@ fn parse_push_gateway_delivery_url(raw: &str) -> Result<url::Url, ConfigError> {
         ));
     }
     Ok(url)
+}
+
+const DEFAULT_DKG_QUERY_TIMEOUT_MS: u64 = 20_000;
+const MAX_DKG_QUERY_TIMEOUT_MS: u64 = 30_000;
+
+fn parse_dkg_query_config(
+    raw_url: Option<String>,
+    raw_token: Option<String>,
+    raw_timeout_ms: Option<String>,
+) -> Result<Option<DkgQueryConfig>, ConfigError> {
+    let raw_url = raw_url
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let raw_token = raw_token.filter(|value| !value.is_empty());
+
+    let (raw_url, bearer_token) = match (raw_url, raw_token) {
+        (None, None) => {
+            if raw_timeout_ms.is_some() {
+                return Err(ConfigError::InvalidValue(
+                    "BUZZ_DKG_QUERY_TIMEOUT_MS requires BUZZ_DKG_QUERY_URL and BUZZ_DKG_QUERY_TOKEN"
+                        .to_string(),
+                ));
+            }
+            return Ok(None);
+        }
+        (Some(url), Some(token)) => (url, token),
+        _ => {
+            return Err(ConfigError::InvalidValue(
+                "BUZZ_DKG_QUERY_URL and BUZZ_DKG_QUERY_TOKEN must be configured together"
+                    .to_string(),
+            ));
+        }
+    };
+
+    if !(32..=512).contains(&bearer_token.len())
+        || bearer_token
+            .bytes()
+            .any(|byte| !(0x21..=0x7e).contains(&byte))
+    {
+        return Err(ConfigError::InvalidValue(
+            "BUZZ_DKG_QUERY_TOKEN must contain 32..=512 visible ASCII bytes".to_string(),
+        ));
+    }
+
+    let url = url::Url::parse(&raw_url).map_err(|error| {
+        ConfigError::InvalidValue(format!("BUZZ_DKG_QUERY_URL is not a valid URL: {error}"))
+    })?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() == "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(ConfigError::InvalidValue(
+            "BUZZ_DKG_QUERY_URL must be a full http(s) endpoint without credentials, query, or fragment"
+                .to_string(),
+        ));
+    }
+
+    let timeout_ms = match raw_timeout_ms {
+        Some(raw) => raw
+            .parse::<u64>()
+            .ok()
+            .filter(|millis| (100..=MAX_DKG_QUERY_TIMEOUT_MS).contains(millis))
+            .ok_or_else(|| {
+                ConfigError::InvalidValue(format!(
+                    "BUZZ_DKG_QUERY_TIMEOUT_MS must be an integer in 100..={MAX_DKG_QUERY_TIMEOUT_MS}"
+                ))
+            })?,
+        None => DEFAULT_DKG_QUERY_TIMEOUT_MS,
+    };
+
+    Ok(Some(DkgQueryConfig {
+        url,
+        bearer_token,
+        timeout: Duration::from_millis(timeout_ms),
+    }))
 }
 
 fn parse_bool(name: &str, default: bool) -> Result<bool, ConfigError> {
@@ -888,6 +1006,12 @@ impl Config {
         };
         let push_gateway_timeout = Duration::from_millis(push_gateway_timeout_millis);
 
+        let dkg_query = parse_dkg_query_config(
+            optional_unicode_env("BUZZ_DKG_QUERY_URL")?,
+            optional_unicode_env("BUZZ_DKG_QUERY_TOKEN")?,
+            optional_unicode_env("BUZZ_DKG_QUERY_TIMEOUT_MS")?,
+        )?;
+
         const MAX_POLICY_MARKDOWN_BYTES: usize = 256 * 1024;
         let read_policy_markdown = |name: &str| -> Result<Option<String>, ConfigError> {
             let value = std::env::var(name)
@@ -1037,6 +1161,7 @@ impl Config {
             push_executor_key_id,
             push_gateway_delivery_url,
             push_gateway_timeout,
+            dkg_query,
             join_policy,
             admin,
             web_dir,
@@ -1152,6 +1277,10 @@ mod tests {
         assert!(
             config.join_policy.is_none(),
             "join_policy should default to None so policy prompts and acceptance receipts are opt-in"
+        );
+        assert!(
+            config.dkg_query.is_none(),
+            "the DKG query route must be disabled unless URL and token are configured"
         );
         assert!(
             config.huddle_audio_available,
@@ -1628,6 +1757,79 @@ mod tests {
             Err(ConfigError::InvalidValue(ref message))
                 if message.contains("BUZZ_PUSH_GATEWAY_TIMEOUT_MS")
         ));
+    }
+
+    #[test]
+    fn dkg_query_gateway_is_disabled_without_complete_config() {
+        assert!(parse_dkg_query_config(None, None, None)
+            .expect("absent gateway config is valid")
+            .is_none());
+        assert!(parse_dkg_query_config(
+            Some("http://127.0.0.1:9296/v1/query".to_string()),
+            None,
+            None,
+        )
+        .is_err());
+        assert!(parse_dkg_query_config(
+            None,
+            Some("0123456789abcdef0123456789abcdef".to_string()),
+            None,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn dkg_query_gateway_accepts_exact_internal_endpoint_and_bounds_timeout() {
+        let default_timeout = parse_dkg_query_config(
+            Some("http://127.0.0.1:9296/v1/query".to_string()),
+            Some("0123456789abcdef0123456789abcdef".to_string()),
+            None,
+        )
+        .expect("valid gateway config")
+        .expect("gateway enabled")
+        .timeout;
+        assert_eq!(default_timeout, Duration::from_millis(20_000));
+
+        let configured = parse_dkg_query_config(
+            Some("http://127.0.0.1:9296/v1/query".to_string()),
+            Some("0123456789abcdef0123456789abcdef".to_string()),
+            Some("15000".to_string()),
+        )
+        .expect("valid gateway config")
+        .expect("gateway enabled");
+        assert_eq!(configured.url.as_str(), "http://127.0.0.1:9296/v1/query");
+        assert_eq!(configured.timeout, Duration::from_millis(15_000));
+        assert!(!format!("{configured:?}").contains("0123456789abcdef"));
+
+        assert!(parse_dkg_query_config(
+            Some("http://127.0.0.1:9296/v1/query".to_string()),
+            Some("0123456789abcdef0123456789abcdef".to_string()),
+            Some("30001".to_string()),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn dkg_query_gateway_rejects_unsafe_endpoint_or_token() {
+        for invalid in [
+            "file:///tmp/query",
+            "http://user@127.0.0.1:9296/v1/query",
+            "http://127.0.0.1:9296/",
+            "http://127.0.0.1:9296/v1/query?token=client",
+        ] {
+            assert!(parse_dkg_query_config(
+                Some(invalid.to_string()),
+                Some("0123456789abcdef0123456789abcdef".to_string()),
+                None,
+            )
+            .is_err());
+        }
+        assert!(parse_dkg_query_config(
+            Some("http://127.0.0.1:9296/v1/query".to_string()),
+            Some("0123456789abcdef0123456789abc\ndef".to_string()),
+            None,
+        )
+        .is_err());
     }
 
     #[test]

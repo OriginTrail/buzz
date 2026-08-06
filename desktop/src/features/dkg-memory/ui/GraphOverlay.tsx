@@ -5,6 +5,7 @@
 // navigates away. Labels are inert text; no editing, no action execution.
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { explorerSource } from "../api";
 import { useSubgraphGraph } from "../hooks";
 import { TopologyView } from "../topology/TopologyView";
 import { GraphCanvas, type GraphSelection } from "./GraphCanvas";
@@ -23,15 +24,17 @@ const LAYER_META = {
 } as const;
 
 export function GraphOverlay({
+  channelId,
   cg,
   subgraph,
   onClose,
 }: {
-  cg: string;
+  channelId: string;
+  cg: string | null;
   subgraph: string;
   onClose: () => void;
 }) {
-  const graph = useSubgraphGraph(cg, subgraph);
+  const graph = useSubgraphGraph(channelId, cg, subgraph);
   const [selection, setSelection] = useState<GraphSelection | null>(null);
   // Spine is the first paint; topology (hexagonal RdfGraph) mounts only on
   // this explicit scoped action — per the repurpose wrap's acceptance gate.
@@ -69,9 +72,15 @@ export function GraphOverlay({
             {decisionCount} decisions · {evidenceCount} evidence
           </span>
         </h2>
-        <span className="rounded-md border border-green-600/40 bg-green-600/10 px-2 py-0.5 text-xs">
-          provenance checked by your node
-        </span>
+        {explorerSource() === "gateway" ? (
+          <span className="rounded-md border border-sky-600/40 bg-sky-600/10 px-2 py-0.5 text-xs">
+            resolved through the community DKG provider
+          </span>
+        ) : (
+          <span className="rounded-md border border-green-600/40 bg-green-600/10 px-2 py-0.5 text-xs">
+            provenance checked by your node
+          </span>
+        )}
         <div className="ml-2 flex items-center gap-2">
           {(["WM", "SWM", "VM"] as const).map((tag) => (
             <span
@@ -121,18 +130,18 @@ export function GraphOverlay({
         <main className="min-w-0 flex-1">
           {graph.isLoading && (
             <div className="p-6 text-sm text-muted-foreground">
-              Reading subgraph through your node…
+              Reading subgraph through the DKG provider…
             </div>
           )}
           {graph.isError && (
             <div className="p-6 text-sm text-muted-foreground">
-              Could not read this subgraph through your local node.
+              Could not read this subgraph through the available DKG provider.
             </div>
           )}
           {data && data.gate !== "ok" && (
             <div className="p-6 text-sm text-muted-foreground">
-              Your edge node is not answering — the graph view resolves only
-              through your own node.
+              This graph is unavailable through both the local node and the
+              community DKG provider.
             </div>
           )}
           {data && data.gate === "ok" && mode === "spine" && (
@@ -145,6 +154,7 @@ export function GraphOverlay({
           )}
           {mode === "topology" && (
             <TopologyView
+              channelId={channelId}
               cg={cg}
               subgraph={subgraph}
               onSelectUri={(uri, label) => {
@@ -210,7 +220,7 @@ function EvidenceRail({
   cg,
 }: {
   selection: GraphSelection;
-  cg: string;
+  cg: string | null;
 }) {
   const { node, neighbors } = selection;
   return (
@@ -244,7 +254,7 @@ function EvidenceRail({
           commit {node.commit}
         </p>
       )}
-      <NodeUiResolve cg={cg} layer={node.layer} entity={node.id} />
+      {cg && <NodeUiResolve cg={cg} layer={node.layer} entity={node.id} />}
       {neighbors.length > 0 && (
         <section>
           <h4 className="mb-1 text-2xs font-medium uppercase tracking-wide text-muted-foreground">

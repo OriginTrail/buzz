@@ -50,6 +50,15 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
     let git_policy_router = api::git::git_policy_router(state.clone());
 
+    let dkg_query_router = state.config.dkg_query.is_some().then(|| {
+        Router::new()
+            .route("/api/dkg/query", post(api::dkg_query::query))
+            .layer(RequestBodyLimitLayer::new(
+                api::dkg_query::MAX_REQUEST_BYTES,
+            ))
+            .with_state(state.clone())
+    });
+
     let admin_enabled = state.config.admin.is_some();
     let admin_web_dir = state
         .config
@@ -137,6 +146,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(media_router)
         .merge(git_router)
         .merge(git_policy_router);
+    if let Some(dkg_query_router) = dkg_query_router {
+        merged = merged.merge(dkg_query_router);
+    }
     if let Some(admin_router) = admin_router {
         merged = merged.merge(admin_router);
     }

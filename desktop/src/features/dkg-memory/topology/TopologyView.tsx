@@ -72,11 +72,13 @@ const NODE_UI_GRAPH_OPTIONS = {
 };
 
 export function TopologyView({
+  channelId,
   cg,
   subgraph,
   onSelectUri,
 }: {
-  cg: string;
+  channelId: string;
+  cg: string | null;
   subgraph: string;
   onSelectUri: (uri: string, label?: string) => void;
 }) {
@@ -84,8 +86,8 @@ export function TopologyView({
     "entity",
   );
   const query = useQuery({
-    queryKey: ["dkg-memory", "topology", cg, subgraph],
-    queryFn: () => fetchTopologyTriples(cg, subgraph),
+    queryKey: ["dkg-memory", "topology", channelId, cg, subgraph],
+    queryFn: () => fetchTopologyTriples(channelId, cg, subgraph),
     staleTime: 30 * 1000,
   });
 
@@ -116,14 +118,14 @@ export function TopologyView({
   if (query.isLoading) {
     return (
       <div className="p-6 text-sm text-muted-foreground">
-        Reading subgraph triples through your node…
+        Reading subgraph triples through the DKG provider…
       </div>
     );
   }
   if (query.isError || query.data?.gate !== "ok") {
     return (
       <div className="p-6 text-sm text-muted-foreground">
-        Graph unavailable — it resolves only through your own node.
+        Graph unavailable through the local node and community DKG provider.
       </div>
     );
   }

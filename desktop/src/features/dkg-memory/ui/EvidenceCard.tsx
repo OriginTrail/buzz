@@ -15,18 +15,20 @@ const LAYER_HUMAN = {
 } as const;
 
 export function EvidenceCard({
+  channelId,
   cg,
   uri,
   title,
   at,
 }: {
-  cg: string;
+  channelId: string;
+  cg: string | null;
   uri: string;
   title: string;
   at: string | null;
 }) {
   const [showEvidence, setShowEvidence] = useState(false);
-  const evidence = useEvidence(cg, showEvidence ? uri : null);
+  const evidence = useEvidence(channelId, cg, showEvidence ? uri : null);
   const env = evidence.data;
   const authorPks = env?.attribution ?? [];
   const profiles = useProfileNames(authorPks);
@@ -77,13 +79,14 @@ export function EvidenceCard({
         <div className="mt-2 border-t border-border pt-2">
           {evidence.isLoading && (
             <p className="text-2xs text-muted-foreground">
-              Reading evidence through your node…
+              Reading evidence through the DKG provider…
             </p>
           )}
           {env?.found && <EnvelopeBody env={env} />}
           {env && env.found === false && (
             <p className="text-2xs text-muted-foreground">
-              This record is not resolvable through your node yet.
+              This record is not resolvable through the available DKG provider
+              yet.
             </p>
           )}
         </div>

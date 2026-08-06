@@ -1,9 +1,7 @@
-// Adapter boundary for the topology view (per the node-ui repurpose wrap):
-// render code never calls the node or explorer directly — this module owns
-// the transport. Today's implementation reads the local explorer (fallback
-// transport per the spec); the canonical direct-node transport can replace
-// the body without touching render code, because the contract is node-shaped.
-const EXPLORER = "http://127.0.0.1:9295";
+// Adapter boundary for the topology view. The shared provider owns local-first
+// selection and authenticated community fallback; render code remains transport
+// agnostic and remote authorization remains channel-scoped.
+import { queryDkgProvider } from "../provider";
 
 export interface TopologyTriple {
   subject: string;
@@ -23,12 +21,16 @@ export interface TopologyData {
 }
 
 export async function fetchTopologyTriples(
-  cg: string,
+  channelId: string,
+  cg: string | null,
   name: string,
 ): Promise<TopologyData> {
-  const res = await fetch(
-    `${EXPLORER}/api/subgraph-triples?cg=${encodeURIComponent(cg)}&name=${encodeURIComponent(name)}`,
-  );
-  if (!res.ok) throw new Error(`subgraph-triples ${res.status}`);
-  return (await res.json()) as TopologyData;
+  return queryDkgProvider<TopologyData, "subgraph_triples">({
+    channelId,
+    operation: "subgraph_triples",
+    arguments: { name },
+    localPath: cg
+      ? `/api/subgraph-triples?cg=${encodeURIComponent(cg)}&name=${encodeURIComponent(name)}`
+      : null,
+  });
 }
