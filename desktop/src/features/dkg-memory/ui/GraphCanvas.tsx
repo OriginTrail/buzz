@@ -213,7 +213,7 @@ export function GraphCanvas({ nodes, edges, selectedId, onSelect }: Props) {
   const compact = density === "compact";
 
   return (
-    <div
+    <section
       className="flex h-full min-h-0 flex-col"
       aria-label="Decision traces timeline"
     >
@@ -456,6 +456,6 @@ export function GraphCanvas({ nodes, edges, selectedId, onSelect }: Props) {
           </div>
         )}
       </div>
-    </div>
+    </section>
   );
 }
