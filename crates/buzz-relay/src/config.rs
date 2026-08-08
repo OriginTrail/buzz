@@ -436,7 +436,7 @@ fn parse_push_gateway_delivery_url(raw: &str) -> Result<url::Url, ConfigError> {
 }
 
 const DEFAULT_DKG_QUERY_TIMEOUT_MS: u64 = 20_000;
-const MAX_DKG_QUERY_TIMEOUT_MS: u64 = 60_000;
+const MAX_DKG_QUERY_TIMEOUT_MS: u64 = 120_000;
 
 fn parse_dkg_query_config(
     raw_url: Option<String>,
@@ -1818,14 +1818,14 @@ mod tests {
         assert!(parse_dkg_query_config(
             Some("http://127.0.0.1:9296/v1/query".to_string()),
             Some("0123456789abcdef0123456789abcdef".to_string()),
-            Some("60000".to_string()),
+            Some("120000".to_string()),
             false,
         )
         .is_ok());
         assert!(parse_dkg_query_config(
             Some("http://127.0.0.1:9296/v1/query".to_string()),
             Some("0123456789abcdef0123456789abcdef".to_string()),
-            Some("60001".to_string()),
+            Some("120001".to_string()),
             false,
         )
         .is_err());
