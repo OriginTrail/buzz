@@ -27,11 +27,11 @@ use super::{api_error, bridge, internal_error, not_found};
 
 /// Maximum public request body accepted by `/api/dkg/query`.
 pub(crate) const MAX_REQUEST_BYTES: usize = 16 * 1024;
-const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+pub(super) const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_NAME_BYTES: usize = 256;
 const MAX_URI_BYTES: usize = 2048;
 
-static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> = LazyLock::new(|| {
+pub(super) static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> = LazyLock::new(|| {
     reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(2))
         .redirect(reqwest::redirect::Policy::none())
@@ -164,7 +164,7 @@ fn channel_is_accessible(accessible_channels: &[Uuid], channel_id: Uuid) -> bool
     accessible_channels.contains(&channel_id)
 }
 
-async fn enforce_authoritative_channel_read(
+pub(super) async fn enforce_authoritative_channel_read(
     state: &AppState,
     tenant: &TenantContext,
     channel_id: Uuid,
@@ -245,7 +245,7 @@ pub async fn query(
     bounded_json_response(response).await
 }
 
-fn upstream_error(error: reqwest::Error) -> (StatusCode, Json<Value>) {
+pub(super) fn upstream_error(error: reqwest::Error) -> (StatusCode, Json<Value>) {
     if error.is_timeout() {
         api_error(StatusCode::GATEWAY_TIMEOUT, "DKG query gateway timed out")
     } else {
@@ -254,7 +254,7 @@ fn upstream_error(error: reqwest::Error) -> (StatusCode, Json<Value>) {
     }
 }
 
-async fn bounded_json_response(
+pub(super) async fn bounded_json_response(
     response: reqwest::Response,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
     let status = response.status();

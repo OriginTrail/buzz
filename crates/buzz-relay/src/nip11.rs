@@ -267,6 +267,11 @@ pub(crate) async fn nip11_document(state: &crate::state::AppState, raw_host: &st
             .push("nip-pl".to_string());
         info.push = Some(push);
     }
+    if state.config.dkg_query.is_some() {
+        info.supported_extensions
+            .get_or_insert_default()
+            .push("buzz-dkg-memory-v1".to_string());
+    }
     info
 }
 

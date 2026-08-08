@@ -827,6 +827,45 @@ impl BuzzClient {
         .await
     }
 
+    /// POST JSON to a relay API route with NIP-98 payload binding and NIP-OA delegation.
+    /// The full request is replay-safe at the application layer and therefore uses the
+    /// standard bounded retry policy.
+    pub async fn post_authed_json(
+        &self,
+        path: &str,
+        value: &serde_json::Value,
+    ) -> Result<String, CliError> {
+        if !path.starts_with('/') || path.contains('?') || path.contains('#') {
+            return Err(CliError::Usage(
+                "API path must be a root-relative path".into(),
+            ));
+        }
+        let url = format!("{}{path}", self.relay_url);
+        let body =
+            bytes::Bytes::from(serde_json::to_vec(value).map_err(|error| {
+                CliError::Other(format!("request serialization failed: {error}"))
+            })?);
+        self.with_retry_body(|| {
+            let url = url.clone();
+            let body = body.clone();
+            async move {
+                let auth = sign_nip98(&self.keys, "POST", &url, Some(&body))?;
+                let response = self
+                    .with_auth_tag(
+                        self.http
+                            .post(&url)
+                            .header("Authorization", auth)
+                            .header("Content-Type", "application/json")
+                            .body(body),
+                    )
+                    .send()
+                    .await?;
+                self.handle_response(response).await
+            }
+        })
+        .await
+    }
+
     /// GET an authed relay endpoint (NIP-98), returning the raw JSON body.
     ///
     /// `path` is a root-relative path incl. any query string, e.g.

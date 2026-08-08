@@ -234,6 +234,9 @@ enum Cmd {
     /// Agent engram management — persistent memory per NIP-AE
     #[command(subcommand)]
     Mem(MemCmd),
+    /// Propose signed, evidence-linked channel memory to the DKG integration
+    #[command(subcommand)]
+    Memory(MemoryCmd),
     /// Persona pack operations (local, no relay connection needed)
     #[command(subcommand)]
     Pack(PackCmd),
@@ -1802,6 +1805,23 @@ pub enum MemCmd {
     },
 }
 
+/// Subcommands for `buzz memory`.
+#[derive(Subcommand)]
+pub enum MemoryCmd {
+    /// Submit an agent-authored semantic memory proposal after a normal chat turn
+    Propose {
+        /// Buzz channel UUID that owns this memory
+        #[arg(long)]
+        channel: String,
+        /// Signed source message event ID; repeat for each piece of evidence
+        #[arg(long = "source", required = true)]
+        source: Vec<String>,
+        /// JSON proposal file, or '-' to read JSON from stdin
+        #[arg(long, default_value = "-")]
+        input: String,
+    },
+}
+
 /// Subcommands for `buzz pack`.
 #[derive(Subcommand)]
 pub enum PackCmd {
@@ -2017,6 +2037,7 @@ async fn run(cli: Cli) -> Result<(), CliError> {
         Cmd::Media(sub) => commands::upload::dispatch_media(sub, &client).await,
         Cmd::Upload(sub) => commands::upload::dispatch(sub, &client).await,
         Cmd::Mem(sub) => commands::mem::dispatch(sub, &client).await,
+        Cmd::Memory(sub) => commands::memory::dispatch(sub, &client).await,
         Cmd::Moderation(sub) => commands::moderation::dispatch(sub, &client, &cli.format).await,
         Cmd::Pack(_) => unreachable!("handled above"),
     }
@@ -2114,6 +2135,7 @@ mod tests {
             "issues",
             "media",
             "mem",
+            "memory",
             "messages",
             "moderation",
             "notes",
@@ -2293,6 +2315,7 @@ mod tests {
             vec!["create", "get", "list", "status"]
         );
         assert_eq!(names(&cmd, "media"), vec!["get"]);
+        assert_eq!(names(&cmd, "memory"), vec!["propose"]);
         assert_eq!(names(&cmd, "upload"), vec!["file"]);
         assert_eq!(names(&cmd, "pack"), vec!["inspect", "validate"]);
         assert_eq!(
@@ -2322,6 +2345,7 @@ mod tests {
             ("issues", 4),
             ("media", 1),
             ("messages", 8),
+            ("memory", 1),
             ("pack", 2),
             ("patches", 4),
             ("pr", 5),

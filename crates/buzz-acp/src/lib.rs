@@ -66,6 +66,68 @@ const MODELS_TIMEOUT: Duration = Duration::from_secs(10);
 /// human interaction, so it must not share the short probe timeout.
 const AUTHENTICATE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
+const DKG_MEMORY_AGENT_INSTRUCTIONS: &str = r#"## DKG Channel Memory
+
+This relay supports agent-authored DKG memory. After every normal channel turn in which you successfully publish a Buzz response, submit one signed memory proposal before ending the turn. Use the current channel UUID, the triggering message event ID(s), and your newly published response `event_id` as `--source` evidence:
+
+```sh
+printf '%s' '{"schemaVersion":1,"summary":"...","items":[{"kind":"decision|claim|question|task|relationship","text":"..."}],"model":"...","promptVersion":"agent-memory-v1"}' | buzz memory propose --channel <current-channel-uuid> --source <trigger-event-id> --source <your-response-event-id> --input -
+```
+
+Extract concise outcomes, claims, open questions, tasks, and relationships from that turn. Relationship items also require `subject`, `predicate`, and `object`; `confidence` is optional from 0 to 1. Record only externally communicable semantics and evidence—never hidden reasoning, chain-of-thought, secrets, credentials, or tool traces. Do not send a second chat message about the memory operation. If proposal submission fails, keep the human response intact and surface the failure only when it affects the requested work."#;
+
+fn nip11_supports_dkg_memory(value: &serde_json::Value) -> bool {
+    value
+        .get("supported_extensions")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|extensions| {
+            extensions
+                .iter()
+                .any(|extension| extension.as_str() == Some("buzz-dkg-memory-v1"))
+        })
+}
+
+async fn relay_supports_dkg_memory(relay_url: &str) -> bool {
+    let url = relay::relay_ws_to_http(relay_url);
+    let result = reqwest::Client::new()
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/nostr+json")
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await;
+    match result {
+        Ok(response) if response.status().is_success() => {
+            match response.json::<serde_json::Value>().await {
+                Ok(value) => nip11_supports_dkg_memory(&value),
+                Err(error) => {
+                    tracing::warn!(%error, "could not parse relay capabilities; DKG memory disabled");
+                    false
+                }
+            }
+        }
+        Ok(response) => {
+            tracing::warn!(status = %response.status(), "could not read relay capabilities; DKG memory disabled");
+            false
+        }
+        Err(error) => {
+            tracing::warn!(%error, "could not read relay capabilities; DKG memory disabled");
+            false
+        }
+    }
+}
+
+fn append_dkg_memory_instructions(system_prompt: Option<String>, enabled: bool) -> Option<String> {
+    if !enabled {
+        return system_prompt;
+    }
+    Some(match system_prompt {
+        Some(prompt) if !prompt.trim().is_empty() => {
+            format!("{}\n\n{}", prompt.trim_end(), DKG_MEMORY_AGENT_INSTRUCTIONS)
+        }
+        _ => DKG_MEMORY_AGENT_INSTRUCTIONS.to_string(),
+    })
+}
+
 /// Publish a kind:20001 presence update event via the WebSocket connection.
 ///
 /// Ephemeral kinds (20000-29999) are rejected by the HTTP bridge, so presence
@@ -1808,6 +1870,13 @@ async fn tokio_main() -> Result<()> {
         );
     }
 
+    let dkg_memory_enabled = relay_supports_dkg_memory(&config.relay_url).await;
+    if dkg_memory_enabled {
+        tracing::info!("relay advertises agent-authored DKG channel memory");
+    }
+    let system_prompt =
+        append_dkg_memory_instructions(config.system_prompt.clone(), dkg_memory_enabled);
+
     let base_prompt_content = config.base_prompt_content.take();
     let ctx = Arc::new(PromptContext {
         mcp_servers: build_mcp_servers(&config),
@@ -1816,7 +1885,7 @@ async fn tokio_main() -> Result<()> {
         max_turn_duration: Duration::from_secs(config.max_turn_duration_secs),
         turn_liveness_interval: Duration::from_secs(config.turn_liveness_secs),
         dedup_mode: config.dedup_mode,
-        system_prompt: config.system_prompt.clone(),
+        system_prompt,
         session_title: config.session_title.clone(),
         team_instructions: config.team_instructions.clone(),
         base_prompt: if config.no_base_prompt {
@@ -4006,6 +4075,35 @@ mod agent_draft_prompt_tests {
         assert!(prompt
             .contains("add them explicitly with `buzz channels add-member` only when authorized"));
         assert!(prompt.contains("never changes membership automatically"));
+    }
+}
+
+#[cfg(test)]
+mod dkg_memory_prompt_tests {
+    use super::*;
+
+    #[test]
+    fn capability_detection_is_exact_and_fail_closed() {
+        assert!(nip11_supports_dkg_memory(&serde_json::json!({
+            "supported_extensions": ["nip-er", "buzz-dkg-memory-v1"]
+        })));
+        assert!(!nip11_supports_dkg_memory(&serde_json::json!({
+            "supported_extensions": ["buzz-dkg-memory-v2"]
+        })));
+        assert!(!nip11_supports_dkg_memory(&serde_json::json!({})));
+    }
+
+    #[test]
+    fn memory_instructions_append_without_replacing_the_agent_persona() {
+        let prompt = append_dkg_memory_instructions(Some("You are Builder.".into()), true)
+            .expect("enabled prompt");
+        assert!(prompt.starts_with("You are Builder."));
+        assert!(prompt.contains("buzz memory propose"));
+        assert!(prompt.contains("never hidden reasoning"));
+        assert_eq!(
+            append_dkg_memory_instructions(Some("persona".into()), false),
+            Some("persona".into())
+        );
     }
 }
 
