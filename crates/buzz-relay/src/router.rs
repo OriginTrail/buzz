@@ -50,18 +50,22 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
     let git_policy_router = api::git::git_policy_router(state.clone());
 
-    let dkg_query_router = state.config.dkg_query.is_some().then(|| {
-        let query = Router::new()
+    let dkg_query_router = state.config.dkg_query.as_ref().map(|config| {
+        let mut router = Router::new()
             .route("/api/dkg/query", post(api::dkg_query::query))
             .layer(RequestBodyLimitLayer::new(
                 api::dkg_query::MAX_REQUEST_BYTES,
             ));
-        let memory = Router::new()
-            .route("/api/dkg/memory", post(api::dkg_memory::propose))
-            .layer(RequestBodyLimitLayer::new(
-                api::dkg_memory::MAX_REQUEST_BYTES,
-            ));
-        query.merge(memory).with_state(state.clone())
+        if config.agent_memory_enabled {
+            router = router.merge(
+                Router::new()
+                    .route("/api/dkg/memory", post(api::dkg_memory::propose))
+                    .layer(RequestBodyLimitLayer::new(
+                        api::dkg_memory::MAX_REQUEST_BYTES,
+                    )),
+            );
+        }
+        router.with_state(state.clone())
     });
 
     let admin_enabled = state.config.admin.is_some();

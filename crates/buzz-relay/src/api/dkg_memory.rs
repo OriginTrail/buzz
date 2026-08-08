@@ -205,6 +205,7 @@ pub async fn propose(
         .config
         .dkg_query
         .as_ref()
+        .filter(|config| config.agent_memory_enabled)
         .ok_or_else(|| not_found("not found"))?;
     let raw_host = headers
         .get(axum::http::header::HOST)

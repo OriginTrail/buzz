@@ -63,6 +63,10 @@ pub struct DkgQueryConfig {
     pub bearer_token: String,
     /// Hard deadline for the complete internal request and response body.
     pub timeout: Duration,
+    /// Whether the configured gateway is known to accept agent-memory proposals.
+    /// This is separate from querying so older query-only integrations cannot
+    /// accidentally advertise or expose an unsupported write capability.
+    pub agent_memory_enabled: bool,
 }
 
 impl std::fmt::Debug for DkgQueryConfig {
@@ -72,6 +76,7 @@ impl std::fmt::Debug for DkgQueryConfig {
             .field("url", &self.url)
             .field("bearer_token", &"<redacted>")
             .field("timeout", &self.timeout)
+            .field("agent_memory_enabled", &self.agent_memory_enabled)
             .finish()
     }
 }
@@ -437,6 +442,7 @@ fn parse_dkg_query_config(
     raw_url: Option<String>,
     raw_token: Option<String>,
     raw_timeout_ms: Option<String>,
+    agent_memory_enabled: bool,
 ) -> Result<Option<DkgQueryConfig>, ConfigError> {
     let raw_url = raw_url
         .map(|value| value.trim().to_owned())
@@ -445,9 +451,9 @@ fn parse_dkg_query_config(
 
     let (raw_url, bearer_token) = match (raw_url, raw_token) {
         (None, None) => {
-            if raw_timeout_ms.is_some() {
+            if raw_timeout_ms.is_some() || agent_memory_enabled {
                 return Err(ConfigError::InvalidValue(
-                    "BUZZ_DKG_QUERY_TIMEOUT_MS requires BUZZ_DKG_QUERY_URL and BUZZ_DKG_QUERY_TOKEN"
+                    "BUZZ_DKG_QUERY_TIMEOUT_MS and BUZZ_DKG_MEMORY_ENABLED require BUZZ_DKG_QUERY_URL and BUZZ_DKG_QUERY_TOKEN"
                         .to_string(),
                 ));
             }
@@ -506,6 +512,7 @@ fn parse_dkg_query_config(
         url,
         bearer_token,
         timeout: Duration::from_millis(timeout_ms),
+        agent_memory_enabled,
     }))
 }
 
@@ -1010,6 +1017,7 @@ impl Config {
             optional_unicode_env("BUZZ_DKG_QUERY_URL")?,
             optional_unicode_env("BUZZ_DKG_QUERY_TOKEN")?,
             optional_unicode_env("BUZZ_DKG_QUERY_TIMEOUT_MS")?,
+            parse_bool("BUZZ_DKG_MEMORY_ENABLED", false)?,
         )?;
 
         const MAX_POLICY_MARKDOWN_BYTES: usize = 256 * 1024;
@@ -1761,19 +1769,22 @@ mod tests {
 
     #[test]
     fn dkg_query_gateway_is_disabled_without_complete_config() {
-        assert!(parse_dkg_query_config(None, None, None)
+        assert!(parse_dkg_query_config(None, None, None, false)
             .expect("absent gateway config is valid")
             .is_none());
+        assert!(parse_dkg_query_config(None, None, None, true).is_err());
         assert!(parse_dkg_query_config(
             Some("http://127.0.0.1:9296/v1/query".to_string()),
             None,
             None,
+            false,
         )
         .is_err());
         assert!(parse_dkg_query_config(
             None,
             Some("0123456789abcdef0123456789abcdef".to_string()),
             None,
+            false,
         )
         .is_err());
     }
@@ -1784,6 +1795,7 @@ mod tests {
             Some("http://127.0.0.1:9296/v1/query".to_string()),
             Some("0123456789abcdef0123456789abcdef".to_string()),
             None,
+            false,
         )
         .expect("valid gateway config")
         .expect("gateway enabled")
@@ -1794,23 +1806,27 @@ mod tests {
             Some("http://127.0.0.1:9296/v1/query".to_string()),
             Some("0123456789abcdef0123456789abcdef".to_string()),
             Some("15000".to_string()),
+            true,
         )
         .expect("valid gateway config")
         .expect("gateway enabled");
         assert_eq!(configured.url.as_str(), "http://127.0.0.1:9296/v1/query");
         assert_eq!(configured.timeout, Duration::from_millis(15_000));
+        assert!(configured.agent_memory_enabled);
         assert!(!format!("{configured:?}").contains("0123456789abcdef"));
 
         assert!(parse_dkg_query_config(
             Some("http://127.0.0.1:9296/v1/query".to_string()),
             Some("0123456789abcdef0123456789abcdef".to_string()),
             Some("60000".to_string()),
+            false,
         )
         .is_ok());
         assert!(parse_dkg_query_config(
             Some("http://127.0.0.1:9296/v1/query".to_string()),
             Some("0123456789abcdef0123456789abcdef".to_string()),
             Some("60001".to_string()),
+            false,
         )
         .is_err());
     }
@@ -1827,6 +1843,7 @@ mod tests {
                 Some(invalid.to_string()),
                 Some("0123456789abcdef0123456789abcdef".to_string()),
                 None,
+                false,
             )
             .is_err());
         }
@@ -1834,6 +1851,7 @@ mod tests {
             Some("http://127.0.0.1:9296/v1/query".to_string()),
             Some("0123456789abcdef0123456789abc\ndef".to_string()),
             None,
+            false,
         )
         .is_err());
     }
