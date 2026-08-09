@@ -14,6 +14,7 @@ import {
 import { explorerSource, nodeUiDeepLink } from "../api";
 import { EvidenceCard } from "./EvidenceCard";
 import { GraphOverlay } from "./GraphOverlay";
+import { SoftwareMemoryQuery } from "./SoftwareMemoryQuery";
 
 // Humanized layer names per the 2026-08-02 humanize wrap (Hermes' table,
 // seconded by OpenClaw): reach + durability in plain words, technical
@@ -312,6 +313,8 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
           onClose={() => setGraphSubgraph(null)}
         />
       )}
+
+      <SoftwareMemoryQuery channelId={channelId} />
 
       {/* Ask this memory — search over what this channel knows */}
       <section>

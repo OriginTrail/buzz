@@ -12,6 +12,117 @@ use crate::MemoryCmd;
 const KIND_DKG_MEMORY_PROPOSAL: u16 = 40009;
 const MAX_SOURCES: usize = 16;
 
+fn bounded_json_string<'a>(
+    object: &'a serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    max: usize,
+) -> Result<&'a str, CliError> {
+    let value = object
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    if value.trim().is_empty() || value.len() > max || value.chars().any(char::is_control) {
+        return Err(CliError::Usage(format!(
+            "memory proposal {field} must contain 1..={max} non-control bytes"
+        )));
+    }
+    Ok(value)
+}
+
+fn validate_v2_content(
+    object: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), CliError> {
+    let profiles = object
+        .get("profiles")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| CliError::Usage("memory proposal profiles must be an array".into()))?;
+    if profiles.is_empty() || profiles.len() > 3 {
+        return Err(CliError::Usage(
+            "memory proposal profiles must contain 1..=3 entries".into(),
+        ));
+    }
+    let mut profile_ids = HashSet::new();
+    for profile in profiles {
+        let profile = profile.as_str().unwrap_or("");
+        if !matches!(profile, "dkg-memory@1" | "dkg-software@1") || !profile_ids.insert(profile) {
+            return Err(CliError::Usage(
+                "memory proposal contains an unsupported or duplicate profile".into(),
+            ));
+        }
+    }
+    if !profile_ids.contains("dkg-memory@1") {
+        return Err(CliError::Usage(
+            "memory proposal profiles must include dkg-memory@1".into(),
+        ));
+    }
+    let entities = object
+        .get("entities")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| CliError::Usage("memory proposal entities must be an array".into()))?;
+    if entities.is_empty() || entities.len() > 100 {
+        return Err(CliError::Usage(
+            "memory proposal entities must contain 1..=100 entries".into(),
+        ));
+    }
+    let mut entity_ids = HashSet::new();
+    for (index, entity) in entities.iter().enumerate() {
+        let entity = entity.as_object().ok_or_else(|| {
+            CliError::Usage(format!(
+                "memory proposal entities[{index}] must be an object"
+            ))
+        })?;
+        let id = bounded_json_string(entity, "id", 64)?;
+        if !id.chars().enumerate().all(|(position, character)| {
+            (position == 0 && character.is_ascii_lowercase())
+                || (position > 0
+                    && (character.is_ascii_lowercase()
+                        || character.is_ascii_digit()
+                        || character == '-'))
+        }) || !entity_ids.insert(id)
+        {
+            return Err(CliError::Usage(format!(
+                "memory proposal entities[{index}].id is invalid or duplicate"
+            )));
+        }
+        bounded_json_string(entity, "type", 100)?;
+        bounded_json_string(entity, "name", 500)?;
+        if entity
+            .get("attributes")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|attributes| attributes.len() > 20)
+        {
+            return Err(CliError::Usage(format!(
+                "memory proposal entities[{index}].attributes exceeds 20 entries"
+            )));
+        }
+    }
+    let relations = object
+        .get("relations")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| CliError::Usage("memory proposal relations must be an array".into()))?;
+    if relations.len() > 200 {
+        return Err(CliError::Usage(
+            "memory proposal relations exceeds 200 entries".into(),
+        ));
+    }
+    for (index, relation) in relations.iter().enumerate() {
+        let relation = relation.as_object().ok_or_else(|| {
+            CliError::Usage(format!(
+                "memory proposal relations[{index}] must be an object"
+            ))
+        })?;
+        let subject = bounded_json_string(relation, "subject", 64)?;
+        let object = bounded_json_string(relation, "object", 64)?;
+        bounded_json_string(relation, "predicate", 100)?;
+        if !entity_ids.contains(subject) || !entity_ids.contains(object) {
+            return Err(CliError::Usage(format!(
+                "memory proposal relations[{index}] references an unknown entity"
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub async fn dispatch(command: MemoryCmd, client: &BuzzClient) -> Result<(), CliError> {
     match command {
         MemoryCmd::Propose {
@@ -33,32 +144,28 @@ fn validate_proposal_content(content: &str) -> Result<(), CliError> {
     let object = value
         .as_object()
         .ok_or_else(|| CliError::Usage("memory proposal must be a JSON object".into()))?;
-    if object
+    bounded_json_string(object, "summary", 1_000)?;
+    match object
         .get("schemaVersion")
         .and_then(serde_json::Value::as_u64)
-        != Some(1)
     {
-        return Err(CliError::Usage(
-            "memory proposal schemaVersion must be 1".into(),
-        ));
-    }
-    let summary = object
-        .get("summary")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-    if summary.trim().is_empty() || summary.len() > 1_000 {
-        return Err(CliError::Usage(
-            "memory proposal summary must contain 1..=1000 bytes".into(),
-        ));
-    }
-    let items = object
-        .get("items")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| CliError::Usage("memory proposal items must be an array".into()))?;
-    if items.is_empty() || items.len() > 50 {
-        return Err(CliError::Usage(
-            "memory proposal items must contain 1..=50 entries".into(),
-        ));
+        Some(1) => {
+            let items = object
+                .get("items")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| CliError::Usage("memory proposal items must be an array".into()))?;
+            if items.is_empty() || items.len() > 50 {
+                return Err(CliError::Usage(
+                    "memory proposal items must contain 1..=50 entries".into(),
+                ));
+            }
+        }
+        Some(2) => validate_v2_content(object)?,
+        _ => {
+            return Err(CliError::Usage(
+                "memory proposal schemaVersion must be 1 or 2".into(),
+            ))
+        }
     }
     Ok(())
 }
@@ -120,5 +227,13 @@ mod tests {
             validate_proposal_content(r#"{"schemaVersion":1,"summary":"x","items":[]}"#).is_err()
         );
         assert!(validate_proposal_content("not-json").is_err());
+        assert!(validate_proposal_content(
+            r#"{"schemaVersion":2,"profiles":["dkg-memory@1","dkg-software@1"],"summary":"JWT implementation","entities":[{"id":"verify-token","type":"code:Function","name":"verifyToken"},{"id":"commit-one","type":"github:Commit","name":"Implement JWT"}],"relations":[{"subject":"commit-one","predicate":"github:affects","object":"verify-token"}]}"#
+        )
+        .is_ok());
+        assert!(validate_proposal_content(
+            r#"{"schemaVersion":2,"profiles":["dkg-memory@1"],"summary":"x","entities":[{"id":"one","type":"memory:Entity","name":"One"}],"relations":[{"subject":"one","predicate":"memory:about","object":"missing"}]}"#
+        )
+        .is_err());
     }
 }

@@ -59,6 +59,42 @@ export interface TrailEntry {
   decisionName: string | null;
 }
 
+export interface SoftwareContributor {
+  contributor: string;
+  contributorName: string | null;
+  commit: string;
+  sha: string;
+  at: number | null;
+  layer: "SWM" | "VM";
+}
+
+export interface SoftwareContributors {
+  gate: MemoryGate;
+  cg?: string;
+  componentName: string;
+  componentType: string | null;
+  contributors: SoftwareContributor[];
+}
+
+export interface DecisionTraceEntry {
+  decision: string;
+  decisionName: string | null;
+  context: string | null;
+  outcome: string | null;
+  commit: string;
+  sha: string;
+  component: string;
+  layer: "SWM" | "VM";
+}
+
+export interface DecisionTrace {
+  gate: MemoryGate;
+  cg?: string;
+  commitSha: string;
+  componentName: string;
+  decisions: DecisionTraceEntry[];
+}
+
 /**
  * Derive the channel's Context Graph id from the latest @dkg receipt in the
  * channel. Receipts are ordinary kind-9 replies whose machine-readable lines
@@ -115,6 +151,34 @@ export async function fetchContributorTrail(
     localPath: cg
       ? `/api/contributor-trail?cg=${encodeURIComponent(cg)}&pubkey=${encodeURIComponent(pubkey)}`
       : null,
+  });
+}
+
+/** Query who changed a named software component through the authenticated relay. */
+export async function fetchSoftwareContributors(
+  channelId: string,
+  componentName: string,
+  componentType?: "function" | "class" | "interface" | "file" | "package",
+): Promise<SoftwareContributors> {
+  return queryDkgProvider<SoftwareContributors, "software_contributors">({
+    channelId,
+    operation: "software_contributors",
+    arguments: { componentName, ...(componentType ? { componentType } : {}) },
+    localPath: null,
+  });
+}
+
+/** Query the decisions that a commit implemented for a named component. */
+export async function fetchDecisionTrace(
+  channelId: string,
+  commitSha: string,
+  componentName: string,
+): Promise<DecisionTrace> {
+  return queryDkgProvider<DecisionTrace, "decision_trace">({
+    channelId,
+    operation: "decision_trace",
+    arguments: { commitSha, componentName },
+    localPath: null,
   });
 }
 

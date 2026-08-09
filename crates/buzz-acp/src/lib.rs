@@ -66,7 +66,7 @@ const MODELS_TIMEOUT: Duration = Duration::from_secs(10);
 /// human interaction, so it must not share the short probe timeout.
 const AUTHENTICATE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
-const DKG_MEMORY_AGENT_INSTRUCTIONS: &str = r#"## DKG Channel Memory
+const DKG_MEMORY_AGENT_INSTRUCTIONS_V1: &str = r#"## DKG Channel Memory
 
 This relay supports agent-authored DKG memory. After every normal channel turn in which you successfully publish a Buzz response, submit one signed memory proposal before ending the turn. Use the current channel UUID, the triggering message event ID(s), and your newly published response `event_id` as `--source` evidence:
 
@@ -76,18 +76,52 @@ printf '%s' '{"schemaVersion":1,"summary":"...","items":[{"kind":"decision|claim
 
 Extract concise outcomes, claims, open questions, tasks, and relationships from that turn. Relationship items also require `subject`, `predicate`, and `object`; `confidence` is optional from 0 to 1. Record only externally communicable semantics and evidence—never hidden reasoning, chain-of-thought, secrets, credentials, or tool traces. Do not send a second chat message about the memory operation. If proposal submission fails, keep the human response intact and surface the failure only when it affects the requested work."#;
 
-fn nip11_supports_dkg_memory(value: &serde_json::Value) -> bool {
-    value
+const DKG_MEMORY_AGENT_INSTRUCTIONS_V2: &str = r#"## DKG Channel Memory
+
+This relay supports versioned, agent-authored DKG memory. After every normal channel turn in which you successfully publish a Buzz response, submit exactly one signed memory proposal before ending the turn. Use the current channel UUID, the triggering message event ID(s), and your newly published response `event_id` as `--source` evidence:
+
+```sh
+printf '%s' '{"schemaVersion":2,"profiles":["dkg-memory@1"],"summary":"...","entities":[{"id":"decision-1","type":"decisions:Decision","name":"...","description":"...","attributes":[{"predicate":"decisions:status","value":"accepted"}]}],"relations":[],"model":"...","promptVersion":"agent-memory-v2"}' | buzz memory propose --channel <current-channel-uuid> --source <trigger-event-id> --source <your-response-event-id> --input -
+```
+
+Always select `dkg-memory@1`. Add `dkg-software@1` only when the evidence discusses code, repositories, commits, reviews, builds, tests, deployments, or software components. General types: `memory:Entity`, `memory:Claim`, `memory:Question`, `decisions:Decision`, `tasks:Task`, and `schema:Person|Organization|Event|Place|Project`. General relations: `memory:about|supports|contradicts|resolves`, `decisions:affects|recordedIn|implementedBy|supersedes`, and `tasks:assignee|relatedDecision|dependsOn|touches`. Software types: `code:Package|File|Function|Class|Interface|TypeAlias|Enum`, `github:Repository|PullRequest|Issue|Commit|Review|User`, and `software:Build|TestCase|TestRun|Deployment|Finding`. Software relations include `code:contains|definedIn|calls|dependsOn`, `github:authoredBy|reviewedBy|affects|inRepo|containsCommit|closes`, and `software:tests|executedTest|supports|deployedCommit`.
+
+Use compact local entity IDs. For stable software identity, use `locator`: GitHub resources use `{"kind":"github","repository":"owner/repo","resource":"commit|pull-request|issue|repository","id":"..."}`; code uses `{"kind":"code","package":"@scope/package","path":"src/file.ts","symbol":"name","symbolKind":"function|class|interface|type-alias|enum"}`. Omit path for packages and symbol fields for files. Useful literal attributes include `decisions:context|outcome|consequences|status`, `tasks:status|priority|dueDate`, `schema:dateCreated`, `code:language|startLine|endLine`, `github:state|mergedAt`, and `software:result|environment`.
+
+Extract concise entities and queryable relationships supported by the signed turn. Record only externally communicable semantics and evidence—never hidden reasoning, chain-of-thought, secrets, credentials, or tool traces. Do not invent ontology terms. Do not send a second chat message about the memory operation. If proposal submission fails, keep the human response intact and surface the failure only when it affects the requested work."#;
+
+fn nip11_dkg_memory_schema(value: &serde_json::Value) -> Option<u8> {
+    let extensions = value
         .get("supported_extensions")
         .and_then(serde_json::Value::as_array)
-        .is_some_and(|extensions| {
-            extensions
-                .iter()
-                .any(|extension| extension.as_str() == Some("buzz-dkg-memory-v1"))
-        })
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    let supports_v2 = extensions
+        .iter()
+        .any(|extension| extension.as_str() == Some("buzz-dkg-memory-v2"));
+    let descriptor = value.get("dkg_memory");
+    let descriptor_supports_v2 = descriptor
+        .and_then(|item| item.get("schema_versions"))
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|versions| versions.iter().any(|version| version.as_u64() == Some(2)))
+        && descriptor
+            .and_then(|item| item.get("profiles"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|profiles| {
+                profiles
+                    .iter()
+                    .any(|profile| profile.as_str() == Some("dkg-memory@1"))
+            });
+    if supports_v2 && descriptor_supports_v2 {
+        return Some(2);
+    }
+    extensions
+        .iter()
+        .any(|extension| extension.as_str() == Some("buzz-dkg-memory-v1"))
+        .then_some(1)
 }
 
-async fn relay_supports_dkg_memory(relay_url: &str) -> bool {
+async fn relay_dkg_memory_schema(relay_url: &str) -> Option<u8> {
     let url = relay::relay_ws_to_http(relay_url);
     let result = reqwest::Client::new()
         .get(url)
@@ -98,33 +132,38 @@ async fn relay_supports_dkg_memory(relay_url: &str) -> bool {
     match result {
         Ok(response) if response.status().is_success() => {
             match response.json::<serde_json::Value>().await {
-                Ok(value) => nip11_supports_dkg_memory(&value),
+                Ok(value) => nip11_dkg_memory_schema(&value),
                 Err(error) => {
                     tracing::warn!(%error, "could not parse relay capabilities; DKG memory disabled");
-                    false
+                    None
                 }
             }
         }
         Ok(response) => {
             tracing::warn!(status = %response.status(), "could not read relay capabilities; DKG memory disabled");
-            false
+            None
         }
         Err(error) => {
             tracing::warn!(%error, "could not read relay capabilities; DKG memory disabled");
-            false
+            None
         }
     }
 }
 
-fn append_dkg_memory_instructions(system_prompt: Option<String>, enabled: bool) -> Option<String> {
-    if !enabled {
-        return system_prompt;
-    }
+fn append_dkg_memory_instructions(
+    system_prompt: Option<String>,
+    schema_version: Option<u8>,
+) -> Option<String> {
+    let instructions = match schema_version {
+        Some(2) => DKG_MEMORY_AGENT_INSTRUCTIONS_V2,
+        Some(1) => DKG_MEMORY_AGENT_INSTRUCTIONS_V1,
+        _ => return system_prompt,
+    };
     Some(match system_prompt {
         Some(prompt) if !prompt.trim().is_empty() => {
-            format!("{}\n\n{}", prompt.trim_end(), DKG_MEMORY_AGENT_INSTRUCTIONS)
+            format!("{}\n\n{}", prompt.trim_end(), instructions)
         }
-        _ => DKG_MEMORY_AGENT_INSTRUCTIONS.to_string(),
+        _ => instructions.to_string(),
     })
 }
 
@@ -1870,12 +1909,15 @@ async fn tokio_main() -> Result<()> {
         );
     }
 
-    let dkg_memory_enabled = relay_supports_dkg_memory(&config.relay_url).await;
-    if dkg_memory_enabled {
-        tracing::info!("relay advertises agent-authored DKG channel memory");
+    let dkg_memory_schema = relay_dkg_memory_schema(&config.relay_url).await;
+    if let Some(schema_version) = dkg_memory_schema {
+        tracing::info!(
+            schema_version,
+            "relay advertises agent-authored DKG channel memory"
+        );
     }
     let system_prompt =
-        append_dkg_memory_instructions(config.system_prompt.clone(), dkg_memory_enabled);
+        append_dkg_memory_instructions(config.system_prompt.clone(), dkg_memory_schema);
 
     let base_prompt_content = config.base_prompt_content.take();
     let ctx = Arc::new(PromptContext {
@@ -4084,26 +4126,46 @@ mod dkg_memory_prompt_tests {
 
     #[test]
     fn capability_detection_is_exact_and_fail_closed() {
-        assert!(nip11_supports_dkg_memory(&serde_json::json!({
-            "supported_extensions": ["nip-er", "buzz-dkg-memory-v1"]
-        })));
-        assert!(!nip11_supports_dkg_memory(&serde_json::json!({
-            "supported_extensions": ["buzz-dkg-memory-v2"]
-        })));
-        assert!(!nip11_supports_dkg_memory(&serde_json::json!({})));
+        assert_eq!(
+            nip11_dkg_memory_schema(&serde_json::json!({
+                "supported_extensions": ["nip-er", "buzz-dkg-memory-v1"]
+            })),
+            Some(1)
+        );
+        assert_eq!(
+            nip11_dkg_memory_schema(&serde_json::json!({
+                "supported_extensions": ["buzz-dkg-memory-v1", "buzz-dkg-memory-v2"],
+                "dkg_memory": {
+                    "schema_versions": [1, 2],
+                    "profiles": ["dkg-memory@1", "dkg-software@1"]
+                }
+            })),
+            Some(2)
+        );
+        assert_eq!(
+            nip11_dkg_memory_schema(&serde_json::json!({
+                "supported_extensions": ["buzz-dkg-memory-v2"]
+            })),
+            None
+        );
+        assert_eq!(nip11_dkg_memory_schema(&serde_json::json!({})), None);
     }
 
     #[test]
     fn memory_instructions_append_without_replacing_the_agent_persona() {
-        let prompt = append_dkg_memory_instructions(Some("You are Builder.".into()), true)
+        let prompt = append_dkg_memory_instructions(Some("You are Builder.".into()), Some(2))
             .expect("enabled prompt");
         assert!(prompt.starts_with("You are Builder."));
         assert!(prompt.contains("buzz memory propose"));
+        assert!(prompt.contains("dkg-software@1"));
+        assert!(prompt.contains("agent-memory-v2"));
         assert!(prompt.contains("never hidden reasoning"));
         assert_eq!(
-            append_dkg_memory_instructions(Some("persona".into()), false),
+            append_dkg_memory_instructions(Some("persona".into()), None),
             Some("persona".into())
         );
+        let legacy = append_dkg_memory_instructions(None, Some(1)).expect("legacy prompt");
+        assert!(legacy.contains("schemaVersion\":1"));
     }
 }
 

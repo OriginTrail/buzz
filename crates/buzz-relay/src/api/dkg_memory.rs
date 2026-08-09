@@ -27,17 +27,60 @@ pub(crate) const MAX_REQUEST_BYTES: usize = 96 * 1024;
 const MAX_EVIDENCE_BYTES: usize = 240 * 1024;
 const MAX_SOURCES: usize = 16;
 const MAX_ITEMS: usize = 50;
+const MAX_ENTITIES: usize = 100;
+const MAX_RELATIONS: usize = 200;
+const MAX_ATTRIBUTES: usize = 20;
 type ApiFailure = (StatusCode, Json<Value>);
 type ParsedProposal = (nostr::Event, Uuid, Vec<nostr::EventId>);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct Proposal {
+struct ProposalV1 {
     schema_version: u8,
     summary: String,
     items: Vec<MemoryItem>,
     model: Option<String>,
     prompt_version: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProposalV2 {
+    schema_version: u8,
+    profiles: Vec<String>,
+    summary: String,
+    entities: Vec<MemoryEntity>,
+    relations: Vec<MemoryRelation>,
+    model: Option<String>,
+    prompt_version: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryEntity {
+    id: String,
+    #[serde(rename = "type")]
+    entity_type: String,
+    name: String,
+    description: Option<String>,
+    locator: Option<Value>,
+    attributes: Option<Vec<MemoryAttribute>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryAttribute {
+    predicate: String,
+    value: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryRelation {
+    subject: String,
+    predicate: String,
+    object: String,
+    confidence: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,9 +117,7 @@ fn bounded(value: &str, field: &str, max: usize) -> Result<(), (StatusCode, Json
     Ok(())
 }
 
-fn validate_semantics(content: &str) -> Result<(), (StatusCode, Json<Value>)> {
-    let proposal: Proposal = serde_json::from_str(content)
-        .map_err(|error| invalid(&format!("invalid proposal content: {error}")))?;
+fn validate_v1(proposal: ProposalV1) -> Result<(), (StatusCode, Json<Value>)> {
     if proposal.schema_version != 1 {
         return Err(invalid("schemaVersion must be 1"));
     }
@@ -118,6 +159,137 @@ fn validate_semantics(content: &str) -> Result<(), (StatusCode, Json<Value>)> {
         }
     }
     Ok(())
+}
+
+fn valid_local_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.chars().enumerate().all(|(index, character)| {
+            (index == 0 && character.is_ascii_lowercase())
+                || (index > 0
+                    && (character.is_ascii_lowercase()
+                        || character.is_ascii_digit()
+                        || character == '-'))
+        })
+}
+
+fn validate_v2(proposal: ProposalV2) -> Result<(), (StatusCode, Json<Value>)> {
+    if proposal.schema_version != 2 {
+        return Err(invalid("schemaVersion must be 2"));
+    }
+    bounded(&proposal.summary, "summary", 1_000)?;
+    if proposal.profiles.is_empty() || proposal.profiles.len() > 3 {
+        return Err(invalid("profiles must contain 1..=3 entries"));
+    }
+    let mut profiles = HashSet::new();
+    for profile in &proposal.profiles {
+        if !matches!(profile.as_str(), "dkg-memory@1" | "dkg-software@1")
+            || !profiles.insert(profile.as_str())
+        {
+            return Err(invalid(
+                "profiles contains an unsupported or duplicate entry",
+            ));
+        }
+    }
+    if !profiles.contains("dkg-memory@1") {
+        return Err(invalid("profiles must include dkg-memory@1"));
+    }
+    if proposal.entities.is_empty() || proposal.entities.len() > MAX_ENTITIES {
+        return Err(invalid("entities must contain 1..=100 entries"));
+    }
+    let mut ids = HashSet::new();
+    for (index, entity) in proposal.entities.iter().enumerate() {
+        if !valid_local_id(&entity.id) || !ids.insert(entity.id.as_str()) {
+            return Err(invalid(&format!(
+                "entities[{index}].id is invalid or duplicate"
+            )));
+        }
+        bounded(&entity.entity_type, &format!("entities[{index}].type"), 100)?;
+        bounded(&entity.name, &format!("entities[{index}].name"), 500)?;
+        if let Some(description) = entity.description.as_deref() {
+            bounded(
+                description,
+                &format!("entities[{index}].description"),
+                4_000,
+            )?;
+        }
+        if entity
+            .locator
+            .as_ref()
+            .is_some_and(|locator| !locator.is_object())
+        {
+            return Err(invalid(&format!(
+                "entities[{index}].locator must be an object"
+            )));
+        }
+        let attributes = entity.attributes.as_deref().unwrap_or_default();
+        if attributes.len() > MAX_ATTRIBUTES {
+            return Err(invalid(&format!(
+                "entities[{index}].attributes exceeds 20 entries"
+            )));
+        }
+        for (attribute_index, attribute) in attributes.iter().enumerate() {
+            bounded(
+                &attribute.predicate,
+                &format!("entities[{index}].attributes[{attribute_index}].predicate"),
+                100,
+            )?;
+            if !(attribute.value.is_string()
+                || attribute.value.is_number()
+                || attribute.value.is_boolean())
+            {
+                return Err(invalid(&format!(
+                    "entities[{index}].attributes[{attribute_index}].value must be scalar"
+                )));
+            }
+        }
+    }
+    if proposal.relations.len() > MAX_RELATIONS {
+        return Err(invalid("relations exceeds 200 entries"));
+    }
+    for (index, relation) in proposal.relations.iter().enumerate() {
+        if !ids.contains(relation.subject.as_str()) || !ids.contains(relation.object.as_str()) {
+            return Err(invalid(&format!(
+                "relations[{index}] references an unknown entity"
+            )));
+        }
+        bounded(
+            &relation.predicate,
+            &format!("relations[{index}].predicate"),
+            100,
+        )?;
+        if relation
+            .confidence
+            .is_some_and(|confidence| !confidence.is_finite() || !(0.0..=1.0).contains(&confidence))
+        {
+            return Err(invalid(&format!(
+                "relations[{index}].confidence must be between 0 and 1"
+            )));
+        }
+    }
+    if let Some(model) = proposal.model.as_deref() {
+        bounded(model, "model", 200)?;
+    }
+    if let Some(version) = proposal.prompt_version.as_deref() {
+        bounded(version, "promptVersion", 200)?;
+    }
+    Ok(())
+}
+
+fn validate_semantics(content: &str) -> Result<(), (StatusCode, Json<Value>)> {
+    let value: Value = serde_json::from_str(content)
+        .map_err(|error| invalid(&format!("invalid proposal content: {error}")))?;
+    match value.get("schemaVersion").and_then(Value::as_u64) {
+        Some(1) => validate_v1(
+            serde_json::from_value(value)
+                .map_err(|error| invalid(&format!("invalid proposal content: {error}")))?,
+        ),
+        Some(2) => validate_v2(
+            serde_json::from_value(value)
+                .map_err(|error| invalid(&format!("invalid proposal content: {error}")))?,
+        ),
+        _ => Err(invalid("schemaVersion must be 1 or 2")),
+    }
 }
 
 fn event_tag_values<'a>(event: &'a nostr::Event, name: &str) -> Vec<&'a str> {
@@ -332,6 +504,35 @@ mod tests {
             parse_proposal(&body, &keys.public_key()).unwrap();
         assert_eq!(parsed_channel, channel);
         assert_eq!(parsed_sources, vec![source]);
+    }
+
+    #[test]
+    fn accepts_v2_profiles_and_rejects_dangling_relations() {
+        let source = nostr::EventId::all_zeros();
+        let valid = serde_json::json!({
+            "schemaVersion": 2,
+            "profiles": ["dkg-memory@1", "dkg-software@1"],
+            "summary": "Implement token rotation",
+            "entities": [
+                {"id":"verify-token", "type":"code:Function", "name":"verifyToken"},
+                {"id":"commit-one", "type":"github:Commit", "name":"Implement JWT"}
+            ],
+            "relations": [
+                {"subject":"commit-one", "predicate":"github:affects", "object":"verify-token"}
+            ]
+        });
+        let (keys, event, _) = proposal(valid, &[source]);
+        assert!(parse_proposal(&serde_json::to_vec(&event).unwrap(), &keys.public_key()).is_ok());
+
+        let invalid = serde_json::json!({
+            "schemaVersion": 2,
+            "profiles": ["dkg-memory@1"],
+            "summary": "Broken relation",
+            "entities": [{"id":"one", "type":"memory:Entity", "name":"One"}],
+            "relations": [{"subject":"one", "predicate":"memory:about", "object":"missing"}]
+        });
+        let (keys, event, _) = proposal(invalid, &[source]);
+        assert!(parse_proposal(&serde_json::to_vec(&event).unwrap(), &keys.public_key()).is_err());
     }
 
     #[test]

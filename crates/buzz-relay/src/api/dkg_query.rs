@@ -53,6 +53,8 @@ struct QueryRequest {
 enum Operation {
     ChannelMemory,
     ContributorTrail,
+    SoftwareContributors,
+    DecisionTrace,
     SubgraphGraph,
     SubgraphTriples,
     Evidence,
@@ -66,6 +68,30 @@ struct EmptyArguments {}
 #[serde(deny_unknown_fields)]
 struct PubkeyArguments {
     pubkey: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ComponentType {
+    Function,
+    Class,
+    Interface,
+    File,
+    Package,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SoftwareContributorArguments {
+    component_name: String,
+    component_type: Option<ComponentType>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DecisionTraceArguments {
+    commit_sha: String,
+    component_name: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -110,6 +136,28 @@ fn parse_and_sanitize_request(
             arguments.pubkey = nostr::PublicKey::from_hex(&arguments.pubkey)
                 .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid contributor pubkey"))?
                 .to_hex();
+            serde_json::to_value(arguments)
+        }
+        Operation::SoftwareContributors => {
+            let mut arguments: SoftwareContributorArguments = parse_arguments(request.arguments)?;
+            arguments.component_name =
+                bounded_text("componentName", arguments.component_name, MAX_NAME_BYTES)?;
+            serde_json::to_value(arguments)
+        }
+        Operation::DecisionTrace => {
+            let mut arguments: DecisionTraceArguments = parse_arguments(request.arguments)?;
+            arguments.component_name =
+                bounded_text("componentName", arguments.component_name, MAX_NAME_BYTES)?;
+            arguments.commit_sha = arguments.commit_sha.to_ascii_lowercase();
+            if arguments.commit_sha.len() < 7
+                || arguments.commit_sha.len() > 64
+                || !arguments
+                    .commit_sha
+                    .chars()
+                    .all(|character| character.is_ascii_hexdigit())
+            {
+                return Err(api_error(StatusCode::BAD_REQUEST, "invalid commitSha"));
+            }
             serde_json::to_value(arguments)
         }
         Operation::SubgraphGraph | Operation::SubgraphTriples => {
@@ -314,6 +362,14 @@ mod tests {
             (
                 "contributor_trail",
                 serde_json::json!({ "pubkey": nostr::Keys::generate().public_key().to_hex() }),
+            ),
+            (
+                "software_contributors",
+                serde_json::json!({ "componentName": "verifyToken", "componentType": "function" }),
+            ),
+            (
+                "decision_trace",
+                serde_json::json!({ "commitSha": "A1B2C3D4", "componentName": "Authentication gateway" }),
             ),
             ("subgraph_graph", serde_json::json!({ "name": "decisions" })),
             (

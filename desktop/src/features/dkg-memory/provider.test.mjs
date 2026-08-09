@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test, { afterEach } from "node:test";
 
-import { fetchChannelMemory } from "./api.ts";
+import {
+  fetchChannelMemory,
+  fetchDecisionTrace,
+  fetchSoftwareContributors,
+} from "./api.ts";
 import {
   explorerSource,
   queryDkgProvider,
@@ -254,4 +258,52 @@ test("community gateway rejects an envelope for another operation", async () => 
     /operation does not match the request/,
   );
   assert.equal(explorerSource(), null);
+});
+
+test("software competency queries use only their fixed typed operations", async () => {
+  installTauri();
+  const bodies = [];
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init.body));
+    bodies.push(body);
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        channelId: body.channelId,
+        cg: "server-cg",
+        operation: body.operation,
+        result:
+          body.operation === "software_contributors"
+            ? {
+                componentName: "verifyToken",
+                componentType: "function",
+                contributors: [],
+              }
+            : {
+                commitSha: "a1b2c3d4",
+                componentName: "Authentication gateway",
+                decisions: [],
+              },
+      }),
+    );
+  };
+
+  await fetchSoftwareContributors(CHANNEL_ID, "verifyToken", "function");
+  await fetchDecisionTrace(CHANNEL_ID, "a1b2c3d4", "Authentication gateway");
+  assert.deepEqual(bodies, [
+    {
+      channelId: CHANNEL_ID,
+      operation: "software_contributors",
+      arguments: { componentName: "verifyToken", componentType: "function" },
+    },
+    {
+      channelId: CHANNEL_ID,
+      operation: "decision_trace",
+      arguments: {
+        commitSha: "a1b2c3d4",
+        componentName: "Authentication gateway",
+      },
+    },
+  ]);
+  assert.equal(JSON.stringify(bodies).includes("sparql"), false);
 });

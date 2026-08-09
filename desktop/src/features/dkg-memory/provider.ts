@@ -10,6 +10,8 @@ export type ExplorerSource = "local" | "gateway";
 export type DkgQueryOperation =
   | "channel_memory"
   | "contributor_trail"
+  | "software_contributors"
+  | "decision_trace"
   | "subgraph_graph"
   | "subgraph_triples"
   | "evidence";
@@ -17,6 +19,11 @@ export type DkgQueryOperation =
 type DkgQueryArguments = {
   channel_memory: Record<string, never>;
   contributor_trail: { pubkey: string };
+  software_contributors: {
+    componentName: string;
+    componentType?: "function" | "class" | "interface" | "file" | "package";
+  };
+  decision_trace: { commitSha: string; componentName: string };
   subgraph_graph: { name: string };
   subgraph_triples: { name: string };
   evidence: { uri: string };
@@ -145,6 +152,8 @@ function adaptCommunityResult<Operation extends DkgQueryOperation>(
 
   switch (envelope.operation) {
     case "channel_memory":
+    case "software_contributors":
+    case "decision_trace":
     case "subgraph_graph":
     case "subgraph_triples":
       return { ...envelope.result, gate: "ok", cg: envelope.cg };
