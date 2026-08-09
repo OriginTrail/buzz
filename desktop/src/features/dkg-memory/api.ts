@@ -71,6 +71,7 @@ export interface SoftwareContributor {
 export interface SoftwareContributors {
   gate: MemoryGate;
   cg?: string;
+  repository: string;
   componentName: string;
   componentType: string | null;
   contributors: SoftwareContributor[];
@@ -90,6 +91,7 @@ export interface DecisionTraceEntry {
 export interface DecisionTrace {
   gate: MemoryGate;
   cg?: string;
+  repository: string;
   commitSha: string;
   componentName: string;
   decisions: DecisionTraceEntry[];
@@ -157,13 +159,18 @@ export async function fetchContributorTrail(
 /** Query who changed a named software component through the authenticated relay. */
 export async function fetchSoftwareContributors(
   channelId: string,
+  repository: string,
   componentName: string,
   componentType?: "function" | "class" | "interface" | "file" | "package",
 ): Promise<SoftwareContributors> {
   return queryDkgProvider<SoftwareContributors, "software_contributors">({
     channelId,
     operation: "software_contributors",
-    arguments: { componentName, ...(componentType ? { componentType } : {}) },
+    arguments: {
+      repository,
+      componentName,
+      ...(componentType ? { componentType } : {}),
+    },
     localPath: null,
   });
 }
@@ -171,13 +178,14 @@ export async function fetchSoftwareContributors(
 /** Query the decisions that a commit implemented for a named component. */
 export async function fetchDecisionTrace(
   channelId: string,
+  repository: string,
   commitSha: string,
   componentName: string,
 ): Promise<DecisionTrace> {
   return queryDkgProvider<DecisionTrace, "decision_trace">({
     channelId,
     operation: "decision_trace",
-    arguments: { commitSha, componentName },
+    arguments: { repository, commitSha, componentName },
     localPath: null,
   });
 }

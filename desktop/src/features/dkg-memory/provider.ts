@@ -20,10 +20,15 @@ type DkgQueryArguments = {
   channel_memory: Record<string, never>;
   contributor_trail: { pubkey: string };
   software_contributors: {
+    repository: string;
     componentName: string;
     componentType?: "function" | "class" | "interface" | "file" | "package";
   };
-  decision_trace: { commitSha: string; componentName: string };
+  decision_trace: {
+    repository: string;
+    commitSha: string;
+    componentName: string;
+  };
   subgraph_graph: { name: string };
   subgraph_triples: { name: string };
   evidence: { uri: string };

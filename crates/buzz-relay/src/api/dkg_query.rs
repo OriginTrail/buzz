@@ -83,6 +83,7 @@ enum ComponentType {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SoftwareContributorArguments {
+    repository: String,
     component_name: String,
     component_type: Option<ComponentType>,
 }
@@ -90,6 +91,7 @@ struct SoftwareContributorArguments {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DecisionTraceArguments {
+    repository: String,
     commit_sha: String,
     component_name: String,
 }
@@ -113,6 +115,51 @@ struct ForwardRequest {
     operation: Operation,
     arguments: Value,
     requester_pubkey: String,
+}
+
+fn canonical_repository(value: String) -> Result<String, (StatusCode, Json<Value>)> {
+    let mut repository = url::Url::parse(&value)
+        .map_err(|_| api_error(StatusCode::BAD_REQUEST, "invalid repository URL"))?;
+    if repository.scheme() != "https"
+        || !repository.username().is_empty()
+        || repository.password().is_some()
+        || repository.query().is_some()
+        || repository.fragment().is_some()
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "repository must be a canonical HTTPS URL",
+        ));
+    }
+    let mut path = repository.path().trim_end_matches('/').to_string();
+    if path.to_ascii_lowercase().ends_with(".git") {
+        path.truncate(path.len() - 4);
+    }
+    if path.is_empty() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "repository URL must include a repository path",
+        ));
+    }
+    if repository.host_str() == Some("github.com") {
+        let segments = path
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect::<Vec<_>>();
+        if segments.len() != 2 {
+            return Err(api_error(
+                StatusCode::BAD_REQUEST,
+                "GitHub repository URL must contain owner/repository",
+            ));
+        }
+        path = format!(
+            "/{}/{}",
+            segments[0].to_ascii_lowercase(),
+            segments[1].to_ascii_lowercase()
+        );
+    }
+    repository.set_path(&path);
+    Ok(repository.to_string())
 }
 
 fn parse_and_sanitize_request(
@@ -140,12 +187,14 @@ fn parse_and_sanitize_request(
         }
         Operation::SoftwareContributors => {
             let mut arguments: SoftwareContributorArguments = parse_arguments(request.arguments)?;
+            arguments.repository = canonical_repository(arguments.repository)?;
             arguments.component_name =
                 bounded_text("componentName", arguments.component_name, MAX_NAME_BYTES)?;
             serde_json::to_value(arguments)
         }
         Operation::DecisionTrace => {
             let mut arguments: DecisionTraceArguments = parse_arguments(request.arguments)?;
+            arguments.repository = canonical_repository(arguments.repository)?;
             arguments.component_name =
                 bounded_text("componentName", arguments.component_name, MAX_NAME_BYTES)?;
             arguments.commit_sha = arguments.commit_sha.to_ascii_lowercase();
@@ -365,11 +414,11 @@ mod tests {
             ),
             (
                 "software_contributors",
-                serde_json::json!({ "componentName": "verifyToken", "componentType": "function" }),
+                serde_json::json!({ "repository": "https://github.com/acme/api", "componentName": "verifyToken", "componentType": "function" }),
             ),
             (
                 "decision_trace",
-                serde_json::json!({ "commitSha": "A1B2C3D4", "componentName": "Authentication gateway" }),
+                serde_json::json!({ "repository": "https://github.com/Acme/API.git/", "commitSha": "A1B2C3D4", "componentName": "Authentication gateway" }),
             ),
             ("subgraph_graph", serde_json::json!({ "name": "decisions" })),
             (
@@ -384,6 +433,31 @@ mod tests {
             let sanitized = parse_and_sanitize_request(&request(operation, arguments), &requester)
                 .expect("allowlisted operation");
             assert_eq!(sanitized.requester_pubkey, requester.to_hex());
+            if matches!(
+                sanitized.operation,
+                Operation::SoftwareContributors | Operation::DecisionTrace
+            ) {
+                assert_eq!(
+                    sanitized.arguments["repository"],
+                    "https://github.com/acme/api"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repository_is_required_and_must_be_canonicalizable() {
+        let requester = requester();
+        for arguments in [
+            serde_json::json!({ "componentName": "verifyToken" }),
+            serde_json::json!({ "repository": "http://github.com/acme/api", "componentName": "verifyToken" }),
+            serde_json::json!({ "repository": "https://github.com/acme/api/issues", "componentName": "verifyToken" }),
+        ] {
+            assert!(parse_and_sanitize_request(
+                &request("software_contributors", arguments),
+                &requester,
+            )
+            .is_err());
         }
     }
 

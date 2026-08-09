@@ -14,6 +14,7 @@ export function SoftwareMemoryQuery({ channelId }: { channelId: string }) {
   const [mode, setMode] = useState<"contributors" | "decisions">(
     "contributors",
   );
+  const [repository, setRepository] = useState("");
   const [component, setComponent] = useState("");
   const [commitSha, setCommitSha] = useState("");
   const [result, setResult] = useState<QueryResult | null>(null);
@@ -21,8 +22,14 @@ export function SoftwareMemoryQuery({ channelId }: { channelId: string }) {
   const [loading, setLoading] = useState(false);
 
   async function runQuery() {
+    const repositoryUrl = repository.trim();
     const componentName = component.trim();
-    if (!componentName || (mode === "decisions" && !commitSha.trim())) return;
+    if (
+      !repositoryUrl ||
+      !componentName ||
+      (mode === "decisions" && !commitSha.trim())
+    )
+      return;
     setLoading(true);
     setError(null);
     setResult(null);
@@ -32,6 +39,7 @@ export function SoftwareMemoryQuery({ channelId }: { channelId: string }) {
           kind: mode,
           value: await fetchSoftwareContributors(
             channelId,
+            repositoryUrl,
             componentName,
             "function",
           ),
@@ -41,6 +49,7 @@ export function SoftwareMemoryQuery({ channelId }: { channelId: string }) {
           kind: mode,
           value: await fetchDecisionTrace(
             channelId,
+            repositoryUrl,
             commitSha.trim(),
             componentName,
           ),
@@ -74,11 +83,21 @@ export function SoftwareMemoryQuery({ channelId }: { channelId: string }) {
           </button>
         ))}
       </div>
-      <div className="flex gap-1">
+      <div className="flex flex-wrap gap-1">
+        <input
+          value={repository}
+          onChange={(event) => setRepository(event.target.value)}
+          placeholder="Repository URL"
+          aria-label="Repository URL"
+          className="min-w-48 flex-[2] rounded-md border border-border bg-muted/30 px-2 py-1 text-xs outline-none focus:border-primary/60"
+        />
         <input
           value={component}
           onChange={(event) => setComponent(event.target.value)}
           placeholder={
+            mode === "contributors" ? "Function name" : "Component name"
+          }
+          aria-label={
             mode === "contributors" ? "Function name" : "Component name"
           }
           className="min-w-0 flex-1 rounded-md border border-border bg-muted/30 px-2 py-1 text-xs outline-none focus:border-primary/60"
@@ -88,6 +107,7 @@ export function SoftwareMemoryQuery({ channelId }: { channelId: string }) {
             value={commitSha}
             onChange={(event) => setCommitSha(event.target.value)}
             placeholder="Commit SHA"
+            aria-label="Commit SHA"
             className="min-w-0 flex-1 rounded-md border border-border bg-muted/30 px-2 py-1 text-xs outline-none focus:border-primary/60"
           />
         )}

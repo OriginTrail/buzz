@@ -275,11 +275,13 @@ test("software competency queries use only their fixed typed operations", async 
         result:
           body.operation === "software_contributors"
             ? {
+                repository: "https://github.com/acme/api",
                 componentName: "verifyToken",
                 componentType: "function",
                 contributors: [],
               }
             : {
+                repository: "https://github.com/acme/api",
                 commitSha: "a1b2c3d4",
                 componentName: "Authentication gateway",
                 decisions: [],
@@ -288,18 +290,33 @@ test("software competency queries use only their fixed typed operations", async 
     );
   };
 
-  await fetchSoftwareContributors(CHANNEL_ID, "verifyToken", "function");
-  await fetchDecisionTrace(CHANNEL_ID, "a1b2c3d4", "Authentication gateway");
+  await fetchSoftwareContributors(
+    CHANNEL_ID,
+    "https://github.com/acme/api",
+    "verifyToken",
+    "function",
+  );
+  await fetchDecisionTrace(
+    CHANNEL_ID,
+    "https://github.com/acme/api",
+    "a1b2c3d4",
+    "Authentication gateway",
+  );
   assert.deepEqual(bodies, [
     {
       channelId: CHANNEL_ID,
       operation: "software_contributors",
-      arguments: { componentName: "verifyToken", componentType: "function" },
+      arguments: {
+        repository: "https://github.com/acme/api",
+        componentName: "verifyToken",
+        componentType: "function",
+      },
     },
     {
       channelId: CHANNEL_ID,
       operation: "decision_trace",
       arguments: {
+        repository: "https://github.com/acme/api",
         commitSha: "a1b2c3d4",
         componentName: "Authentication gateway",
       },

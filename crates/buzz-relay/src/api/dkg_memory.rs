@@ -173,6 +173,51 @@ fn valid_local_id(value: &str) -> bool {
         })
 }
 
+fn validate_entity_identity(
+    entity: &MemoryEntity,
+    index: usize,
+) -> Result<(), (StatusCode, Json<Value>)> {
+    let locator = entity.locator.as_ref().and_then(Value::as_object);
+    let locator_kind = locator
+        .and_then(|value| value.get("kind"))
+        .and_then(Value::as_str);
+    if matches!(
+        entity.entity_type.as_str(),
+        "code:Package"
+            | "code:File"
+            | "code:Function"
+            | "code:Class"
+            | "code:Interface"
+            | "code:TypeAlias"
+            | "code:Enum"
+    ) {
+        let repository = locator
+            .and_then(|value| value.get("repository"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if locator_kind != Some("code") || !repository.starts_with("https://") {
+            return Err(invalid(&format!(
+                "entities[{index}] code identity requires a canonical HTTPS repository locator"
+            )));
+        }
+    }
+    if matches!(
+        entity.entity_type.as_str(),
+        "github:Repository" | "github:PullRequest" | "github:Issue" | "github:Commit"
+    ) && locator_kind != Some("github")
+    {
+        return Err(invalid(&format!(
+            "entities[{index}] GitHub identity requires a github locator"
+        )));
+    }
+    if entity.entity_type == "schema:Project" && locator_kind != Some("uri") {
+        return Err(invalid(&format!(
+            "entities[{index}] project identity requires a URI locator"
+        )));
+    }
+    Ok(())
+}
+
 fn validate_v2(proposal: ProposalV2) -> Result<(), (StatusCode, Json<Value>)> {
     if proposal.schema_version != 2 {
         return Err(invalid("schemaVersion must be 2"));
@@ -222,6 +267,7 @@ fn validate_v2(proposal: ProposalV2) -> Result<(), (StatusCode, Json<Value>)> {
                 "entities[{index}].locator must be an object"
             )));
         }
+        validate_entity_identity(entity, index)?;
         let attributes = entity.attributes.as_deref().unwrap_or_default();
         if attributes.len() > MAX_ATTRIBUTES {
             return Err(invalid(&format!(
@@ -514,8 +560,8 @@ mod tests {
             "profiles": ["dkg-memory@1", "dkg-software@1"],
             "summary": "Implement token rotation",
             "entities": [
-                {"id":"verify-token", "type":"code:Function", "name":"verifyToken"},
-                {"id":"commit-one", "type":"github:Commit", "name":"Implement JWT"}
+                {"id":"verify-token", "type":"code:Function", "name":"verifyToken", "locator":{"kind":"code","repository":"https://github.com/acme/api","package":"@acme/auth","path":"src/token.ts","symbol":"verifyToken","symbolKind":"function"}},
+                {"id":"commit-one", "type":"github:Commit", "name":"Implement JWT", "locator":{"kind":"github","repository":"acme/api","resource":"commit","id":"a1b2c3d4"}}
             ],
             "relations": [
                 {"subject":"commit-one", "predicate":"github:affects", "object":"verify-token"}

@@ -86,6 +86,48 @@ fn validate_v2_content(
         }
         bounded_json_string(entity, "type", 100)?;
         bounded_json_string(entity, "name", 500)?;
+        let entity_type = entity
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let locator = entity.get("locator").and_then(serde_json::Value::as_object);
+        let locator_kind = locator
+            .and_then(|value| value.get("kind"))
+            .and_then(serde_json::Value::as_str);
+        if matches!(
+            entity_type,
+            "code:Package"
+                | "code:File"
+                | "code:Function"
+                | "code:Class"
+                | "code:Interface"
+                | "code:TypeAlias"
+                | "code:Enum"
+        ) {
+            let repository = locator
+                .and_then(|value| value.get("repository"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if locator_kind != Some("code") || !repository.starts_with("https://") {
+                return Err(CliError::Usage(format!(
+                    "memory proposal entities[{index}] code identity requires a canonical HTTPS repository locator"
+                )));
+            }
+        }
+        if matches!(
+            entity_type,
+            "github:Repository" | "github:PullRequest" | "github:Issue" | "github:Commit"
+        ) && locator_kind != Some("github")
+        {
+            return Err(CliError::Usage(format!(
+                "memory proposal entities[{index}] GitHub identity requires a github locator"
+            )));
+        }
+        if entity_type == "schema:Project" && locator_kind != Some("uri") {
+            return Err(CliError::Usage(format!(
+                "memory proposal entities[{index}] project identity requires a URI locator"
+            )));
+        }
         if entity
             .get("attributes")
             .and_then(serde_json::Value::as_array)
@@ -228,9 +270,13 @@ mod tests {
         );
         assert!(validate_proposal_content("not-json").is_err());
         assert!(validate_proposal_content(
-            r#"{"schemaVersion":2,"profiles":["dkg-memory@1","dkg-software@1"],"summary":"JWT implementation","entities":[{"id":"verify-token","type":"code:Function","name":"verifyToken"},{"id":"commit-one","type":"github:Commit","name":"Implement JWT"}],"relations":[{"subject":"commit-one","predicate":"github:affects","object":"verify-token"}]}"#
+            r#"{"schemaVersion":2,"profiles":["dkg-memory@1","dkg-software@1"],"summary":"JWT implementation","entities":[{"id":"verify-token","type":"code:Function","name":"verifyToken","locator":{"kind":"code","repository":"https://github.com/acme/api","package":"@acme/auth","path":"src/token.ts","symbol":"verifyToken","symbolKind":"function"}},{"id":"commit-one","type":"github:Commit","name":"Implement JWT","locator":{"kind":"github","repository":"acme/api","resource":"commit","id":"a1b2c3d4"}}],"relations":[{"subject":"commit-one","predicate":"github:affects","object":"verify-token"}]}"#
         )
         .is_ok());
+        assert!(validate_proposal_content(
+            r#"{"schemaVersion":2,"profiles":["dkg-memory@1","dkg-software@1"],"summary":"ambiguous code","entities":[{"id":"verify-token","type":"code:Function","name":"verifyToken","locator":{"kind":"code","package":"@acme/auth","path":"src/token.ts","symbol":"verifyToken","symbolKind":"function"}}],"relations":[]}"#
+        )
+        .is_err());
         assert!(validate_proposal_content(
             r#"{"schemaVersion":2,"profiles":["dkg-memory@1"],"summary":"x","entities":[{"id":"one","type":"memory:Entity","name":"One"}],"relations":[{"subject":"one","predicate":"memory:about","object":"missing"}]}"#
         )
