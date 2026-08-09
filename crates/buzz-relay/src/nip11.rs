@@ -248,8 +248,15 @@ fn dkg_memory_descriptor() -> serde_json::Value {
             "decision_trace",
             "subgraph_graph",
             "subgraph_triples",
-            "evidence"
-        ]
+            "evidence",
+            "semantic_query"
+        ],
+        "semantic_query": {
+            "scopes": ["current_channel"],
+            "forms": ["select", "ask", "construct"],
+            "max_limit": 100,
+            "cost_budget": 40
+        }
     })
 }
 
@@ -289,19 +296,16 @@ pub(crate) async fn nip11_document(state: &crate::state::AppState, raw_host: &st
             .push("nip-pl".to_string());
         info.push = Some(push);
     }
-    if state
-        .config
-        .dkg_query
-        .as_ref()
-        .is_some_and(|config| config.agent_memory_enabled)
-    {
-        info.supported_extensions
-            .get_or_insert_default()
-            .push("buzz-dkg-memory-v1".to_string());
-        info.supported_extensions
-            .get_or_insert_default()
-            .push("buzz-dkg-memory-v2".to_string());
+    if let Some(config) = state.config.dkg_query.as_ref() {
         info.dkg_memory = Some(dkg_memory_descriptor());
+        if config.agent_memory_enabled {
+            info.supported_extensions
+                .get_or_insert_default()
+                .push("buzz-dkg-memory-v1".to_string());
+            info.supported_extensions
+                .get_or_insert_default()
+                .push("buzz-dkg-memory-v2".to_string());
+        }
     }
     info
 }
@@ -443,6 +447,11 @@ mod tests {
         assert!(descriptor["query_operations"]
             .as_array()
             .is_some_and(|operations| operations.contains(&serde_json::json!("decision_trace"))));
+        assert!(descriptor["query_operations"]
+            .as_array()
+            .is_some_and(|operations| operations.contains(&serde_json::json!("semantic_query"))));
+        assert_eq!(descriptor["semantic_query"]["scopes"][0], "current_channel");
+        assert_eq!(descriptor["semantic_query"]["max_limit"], 100);
     }
 
     #[test]

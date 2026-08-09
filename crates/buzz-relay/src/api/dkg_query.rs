@@ -30,6 +30,7 @@ pub(crate) const MAX_REQUEST_BYTES: usize = 16 * 1024;
 pub(super) const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_NAME_BYTES: usize = 256;
 const MAX_URI_BYTES: usize = 2048;
+const MAX_SPARQL_BYTES: usize = 8 * 1024;
 
 pub(super) static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> = LazyLock::new(|| {
     reqwest::Client::builder()
@@ -45,6 +46,7 @@ pub(super) static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> = LazyL
 struct QueryRequest {
     channel_id: Uuid,
     operation: Operation,
+    scope: Option<QueryScope>,
     arguments: Value,
 }
 
@@ -58,6 +60,34 @@ enum Operation {
     SubgraphGraph,
     SubgraphTriples,
     Evidence,
+    SemanticQuery,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct QueryScope {
+    r#type: QueryScopeType,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum QueryScopeType {
+    CurrentChannel,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum QueryView {
+    Both,
+    Shared,
+    Verified,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SemanticQueryArguments {
+    sparql: String,
+    view: Option<QueryView>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -113,8 +143,26 @@ struct UriArguments {
 struct ForwardRequest {
     channel_id: Uuid,
     operation: Operation,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<QueryScope>,
     arguments: Value,
     requester_pubkey: String,
+}
+
+fn bounded_sparql(value: String) -> Result<String, (StatusCode, Json<Value>)> {
+    let value = value.trim();
+    if value.is_empty()
+        || value.len() > MAX_SPARQL_BYTES
+        || value
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "sparql must contain 1..=8192 UTF-8 bytes and no binary control characters",
+        ));
+    }
+    Ok(value.to_owned())
 }
 
 fn canonical_repository(value: String) -> Result<String, (StatusCode, Json<Value>)> {
@@ -173,6 +221,13 @@ fn parse_and_sanitize_request(
         )
     })?;
 
+    if !matches!(request.operation, Operation::SemanticQuery) && request.scope.is_some() {
+        return Err(api_error(
+            StatusCode::BAD_REQUEST,
+            "scope is only accepted for semantic_query",
+        ));
+    }
+
     let arguments = match request.operation {
         Operation::ChannelMemory => {
             let arguments: EmptyArguments = parse_arguments(request.arguments)?;
@@ -219,12 +274,32 @@ fn parse_and_sanitize_request(
             arguments.uri = bounded_text("uri", arguments.uri, MAX_URI_BYTES)?;
             serde_json::to_value(arguments)
         }
+        Operation::SemanticQuery => {
+            if !matches!(
+                &request.scope,
+                Some(QueryScope {
+                    r#type: QueryScopeType::CurrentChannel
+                })
+            ) {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    "semantic_query requires scope.type=current_channel",
+                ));
+            }
+            let mut arguments: SemanticQueryArguments = parse_arguments(request.arguments)?;
+            arguments.sparql = bounded_sparql(arguments.sparql)?;
+            if arguments.view.is_none() {
+                arguments.view = Some(QueryView::Both);
+            }
+            serde_json::to_value(arguments)
+        }
     }
     .map_err(|_| internal_error("serializing sanitized DKG query arguments"))?;
 
     Ok(ForwardRequest {
         channel_id: request.channel_id,
         operation: request.operation,
+        scope: request.scope,
         arguments,
         requester_pubkey: requester.to_hex(),
     })
@@ -403,6 +478,16 @@ mod tests {
         .expect("serialize test request")
     }
 
+    fn semantic_request(sparql: &str, view: Option<&str>) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "channelId": Uuid::new_v4(),
+            "operation": "semantic_query",
+            "scope": { "type": "current_channel" },
+            "arguments": { "sparql": sparql, "view": view },
+        }))
+        .expect("serialize semantic query")
+    }
+
     #[test]
     fn accepts_only_operation_specific_arguments() {
         let requester = requester();
@@ -443,6 +528,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn accepts_only_current_channel_semantic_queries_and_sanitizes_defaults() {
+        let requester = requester();
+        let sanitized = parse_and_sanitize_request(
+            &semantic_request(
+                "SELECT ?s WHERE { GRAPH ?g { ?s <urn:type> <urn:Decision> } } LIMIT 25",
+                None,
+            ),
+            &requester,
+        )
+        .expect("valid semantic query");
+        assert!(matches!(sanitized.operation, Operation::SemanticQuery));
+        assert_eq!(sanitized.arguments["view"], "both");
+        assert!(matches!(
+            sanitized.scope,
+            Some(QueryScope {
+                r#type: QueryScopeType::CurrentChannel
+            })
+        ));
+
+        let missing_scope = serde_json::json!({
+            "channelId": Uuid::new_v4(),
+            "operation": "semantic_query",
+            "arguments": { "sparql": "ASK { <urn:s> <urn:p> ?o }" }
+        });
+        assert!(parse_and_sanitize_request(
+            &serde_json::to_vec(&missing_scope).expect("serialize"),
+            &requester
+        )
+        .is_err());
+        assert!(parse_and_sanitize_request(
+            &semantic_request(
+                "SELECT ?s WHERE { ?s <urn:p> ?o } LIMIT 10\0",
+                Some("shared")
+            ),
+            &requester
+        )
+        .is_err());
     }
 
     #[test]

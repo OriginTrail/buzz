@@ -1820,6 +1820,42 @@ pub enum MemoryCmd {
         #[arg(long, default_value = "-")]
         input: String,
     },
+    /// Run a safe, read-only SPARQL query against the current channel's DKG memory
+    Query {
+        /// Buzz channel UUID that defines the only queryable Context Graph
+        #[arg(long)]
+        channel: String,
+        /// SPARQL file, or '-' to read the query from stdin
+        #[arg(long, default_value = "-")]
+        input: String,
+        /// Visible DKG memory layer(s) to query
+        #[arg(long, value_enum, default_value = "both")]
+        view: MemoryQueryView,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+/// Visible DKG memory layers selectable by `buzz memory query`.
+pub enum MemoryQueryView {
+    /// Query both Shared Working Memory and Verifiable Memory.
+    #[value(name = "both")]
+    Both,
+    /// Query only Shared Working Memory.
+    #[value(name = "shared")]
+    Shared,
+    /// Query only Verifiable Memory.
+    #[value(name = "verified")]
+    Verified,
+}
+
+impl std::fmt::Display for MemoryQueryView {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Both => write!(f, "both"),
+            Self::Shared => write!(f, "shared"),
+            Self::Verified => write!(f, "verified"),
+        }
+    }
 }
 
 /// Subcommands for `buzz pack`.

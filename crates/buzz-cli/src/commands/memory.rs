@@ -7,10 +7,11 @@ use nostr::{EventBuilder, Kind, Tag};
 use crate::client::BuzzClient;
 use crate::error::CliError;
 use crate::validate::{read_file_or_stdin, validate_hex64, validate_uuid};
-use crate::MemoryCmd;
+use crate::{MemoryCmd, MemoryQueryView};
 
 const KIND_DKG_MEMORY_PROPOSAL: u16 = 40009;
 const MAX_SOURCES: usize = 16;
+const MAX_SPARQL_BYTES: usize = 8 * 1024;
 
 fn bounded_json_string<'a>(
     object: &'a serde_json::Map<String, serde_json::Value>,
@@ -172,7 +173,47 @@ pub async fn dispatch(command: MemoryCmd, client: &BuzzClient) -> Result<(), Cli
             source,
             input,
         } => propose(client, &channel, &source, &input).await,
+        MemoryCmd::Query {
+            channel,
+            input,
+            view,
+        } => query(client, &channel, &input, view).await,
     }
+}
+
+fn validate_sparql(sparql: &str) -> Result<&str, CliError> {
+    let sparql = sparql.trim();
+    if sparql.is_empty()
+        || sparql.len() > MAX_SPARQL_BYTES
+        || sparql
+            .chars()
+            .any(|character| character.is_control() && !matches!(character, '\n' | '\r' | '\t'))
+    {
+        return Err(CliError::Usage(
+            "SPARQL must contain 1..=8192 UTF-8 bytes and no binary control characters".into(),
+        ));
+    }
+    Ok(sparql)
+}
+
+async fn query(
+    client: &BuzzClient,
+    channel: &str,
+    input: &str,
+    view: MemoryQueryView,
+) -> Result<(), CliError> {
+    validate_uuid(channel)?;
+    let source = read_file_or_stdin(input)?;
+    let sparql = validate_sparql(&source)?;
+    let request = serde_json::json!({
+        "channelId": channel,
+        "operation": "semantic_query",
+        "scope": { "type": "current_channel" },
+        "arguments": { "sparql": sparql, "view": view.to_string() }
+    });
+    let response = client.post_authed_json("/api/dkg/query", &request).await?;
+    println!("{response}");
+    Ok(())
 }
 
 fn validate_proposal_content(content: &str) -> Result<(), CliError> {
@@ -281,5 +322,13 @@ mod tests {
             r#"{"schemaVersion":2,"profiles":["dkg-memory@1"],"summary":"x","entities":[{"id":"one","type":"memory:Entity","name":"One"}],"relations":[{"subject":"one","predicate":"memory:about","object":"missing"}]}"#
         )
         .is_err());
+    }
+
+    #[test]
+    fn semantic_query_allows_formatting_but_rejects_binary_controls_and_oversize_input() {
+        assert!(validate_sparql("SELECT ?s WHERE {\n?s <urn:p> ?o\n} LIMIT 25").is_ok());
+        assert!(validate_sparql("SELECT ?s WHERE { ?s <urn:p> ?o }\0").is_err());
+        assert!(validate_sparql(&"x".repeat(MAX_SPARQL_BYTES + 1)).is_err());
+        assert!(validate_sparql("   ").is_err());
     }
 }

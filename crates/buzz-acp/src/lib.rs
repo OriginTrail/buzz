@@ -90,6 +90,32 @@ Use compact local entity IDs. For stable software identity, use `locator`: GitHu
 
 Extract concise entities and queryable relationships supported by the signed turn. Record only externally communicable semantics and evidence—never hidden reasoning, chain-of-thought, secrets, credentials, or tool traces. Do not invent ontology terms. Do not send a second chat message about the memory operation. If proposal submission fails, keep the human response intact and surface the failure only when it affects the requested work."#;
 
+const DKG_SEMANTIC_QUERY_AGENT_INSTRUCTIONS: &str = r#"## Query DKG Channel Memory
+
+This relay lets you author read-only SPARQL against the current Buzz channel's Context Graph. Before changing code or making a recommendation, query memory when earlier decisions, tasks, contributors, code entities, or evidence from this channel could affect the work:
+
+```sh
+cat <<'SPARQL' | buzz memory query --channel <current-channel-uuid> --view both --input -
+PREFIX schema: <http://schema.org/>
+SELECT ?entity ?name ?type WHERE {
+  GRAPH ?g {
+    ?entity schema:name ?name ; a ?type .
+    FILTER(CONTAINS(LCASE(STR(?name)), "x402"))
+  }
+} LIMIT 25
+SPARQL
+```
+
+Use `shared` for recent shared working memory, `verified` for verifiable memory, or `both` by default. Useful prefixes are `schema: <http://schema.org/>`, `prov: <http://www.w3.org/ns/prov#>`, `memory: <http://dkg.io/ontology/memory/>`, `decisions: <http://dkg.io/ontology/decisions/>`, `tasks: <http://dkg.io/ontology/tasks/>`, `code: <http://dkg.io/ontology/code/>`, `github: <http://dkg.io/ontology/github/>`, and `software: <http://dkg.io/ontology/software/>`.
+
+Keep exploration light: select only fields you need, start at `LIMIT 25`, prefer exact IRIs and small `VALUES` lists, use exact predicate IRIs, and follow a small discovery query with a focused query. Do not use updates, `FROM`, `SERVICE`, explicit graph IRIs, fully unbound `?s ?p ?o` scans, or unbounded `*`, `+`, or `!` property paths. SELECT and CONSTRUCT require `LIMIT` and the maximum is 100. If the relay returns `query_too_expensive` or `unsafe_query`, read `error.details.suggestions`, simplify or split the query, and retry. The relay always resolves `<current-channel-uuid>` to its Context Graph server-side; never attempt to supply a Context Graph ID."#;
+
+#[derive(Clone, Copy, Default)]
+struct DkgCapabilities {
+    memory_schema: Option<u8>,
+    semantic_query: bool,
+}
+
 fn nip11_dkg_memory_schema(value: &serde_json::Value) -> Option<u8> {
     let extensions = value
         .get("supported_extensions")
@@ -121,7 +147,39 @@ fn nip11_dkg_memory_schema(value: &serde_json::Value) -> Option<u8> {
         .then_some(1)
 }
 
-async fn relay_dkg_memory_schema(relay_url: &str) -> Option<u8> {
+fn nip11_dkg_semantic_query(value: &serde_json::Value) -> bool {
+    let descriptor = match value.get("dkg_memory") {
+        Some(descriptor) => descriptor,
+        None => return false,
+    };
+    let operation = descriptor
+        .get("query_operations")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|operations| {
+            operations
+                .iter()
+                .any(|operation| operation.as_str() == Some("semantic_query"))
+        });
+    let semantic = match descriptor.get("semantic_query") {
+        Some(semantic) => semantic,
+        None => return false,
+    };
+    let current_channel = semantic
+        .get("scopes")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|scopes| {
+            scopes
+                .iter()
+                .any(|scope| scope.as_str() == Some("current_channel"))
+        });
+    let forms = semantic.get("forms").and_then(serde_json::Value::as_array);
+    let has_form = |expected: &str| {
+        forms.is_some_and(|items| items.iter().any(|item| item.as_str() == Some(expected)))
+    };
+    operation && current_channel && has_form("select") && has_form("ask")
+}
+
+async fn relay_dkg_capabilities(relay_url: &str) -> DkgCapabilities {
     let url = relay::relay_ws_to_http(relay_url);
     let result = reqwest::Client::new()
         .get(url)
@@ -132,38 +190,55 @@ async fn relay_dkg_memory_schema(relay_url: &str) -> Option<u8> {
     match result {
         Ok(response) if response.status().is_success() => {
             match response.json::<serde_json::Value>().await {
-                Ok(value) => nip11_dkg_memory_schema(&value),
+                Ok(value) => DkgCapabilities {
+                    memory_schema: nip11_dkg_memory_schema(&value),
+                    semantic_query: nip11_dkg_semantic_query(&value),
+                },
                 Err(error) => {
                     tracing::warn!(%error, "could not parse relay capabilities; DKG memory disabled");
-                    None
+                    DkgCapabilities::default()
                 }
             }
         }
         Ok(response) => {
             tracing::warn!(status = %response.status(), "could not read relay capabilities; DKG memory disabled");
-            None
+            DkgCapabilities::default()
         }
         Err(error) => {
             tracing::warn!(%error, "could not read relay capabilities; DKG memory disabled");
-            None
+            DkgCapabilities::default()
         }
     }
 }
 
 fn append_dkg_memory_instructions(
     system_prompt: Option<String>,
-    schema_version: Option<u8>,
+    capabilities: DkgCapabilities,
 ) -> Option<String> {
-    let instructions = match schema_version {
-        Some(2) => DKG_MEMORY_AGENT_INSTRUCTIONS_V2,
-        Some(1) => DKG_MEMORY_AGENT_INSTRUCTIONS_V1,
-        _ => return system_prompt,
+    let memory_instructions = match capabilities.memory_schema {
+        Some(2) => Some(DKG_MEMORY_AGENT_INSTRUCTIONS_V2),
+        Some(1) => Some(DKG_MEMORY_AGENT_INSTRUCTIONS_V1),
+        _ => None,
     };
+    let query_instructions = capabilities
+        .semantic_query
+        .then_some(DKG_SEMANTIC_QUERY_AGENT_INSTRUCTIONS);
+    let mut sections = [memory_instructions, query_instructions]
+        .into_iter()
+        .flatten();
+    let first = match sections.next() {
+        Some(section) => section,
+        None => return system_prompt,
+    };
+    let appended = std::iter::once(first)
+        .chain(sections)
+        .collect::<Vec<_>>()
+        .join("\n\n");
     Some(match system_prompt {
         Some(prompt) if !prompt.trim().is_empty() => {
-            format!("{}\n\n{}", prompt.trim_end(), instructions)
+            format!("{}\n\n{}", prompt.trim_end(), appended)
         }
-        _ => instructions.to_string(),
+        _ => appended,
     })
 }
 
@@ -1909,15 +1984,18 @@ async fn tokio_main() -> Result<()> {
         );
     }
 
-    let dkg_memory_schema = relay_dkg_memory_schema(&config.relay_url).await;
-    if let Some(schema_version) = dkg_memory_schema {
+    let dkg_capabilities = relay_dkg_capabilities(&config.relay_url).await;
+    if let Some(schema_version) = dkg_capabilities.memory_schema {
         tracing::info!(
             schema_version,
             "relay advertises agent-authored DKG channel memory"
         );
     }
+    if dkg_capabilities.semantic_query {
+        tracing::info!("relay advertises agent-authored DKG semantic queries");
+    }
     let system_prompt =
-        append_dkg_memory_instructions(config.system_prompt.clone(), dkg_memory_schema);
+        append_dkg_memory_instructions(config.system_prompt.clone(), dkg_capabilities);
 
     let base_prompt_content = config.base_prompt_content.take();
     let ctx = Arc::new(PromptContext {
@@ -4149,12 +4227,31 @@ mod dkg_memory_prompt_tests {
             None
         );
         assert_eq!(nip11_dkg_memory_schema(&serde_json::json!({})), None);
+        assert!(nip11_dkg_semantic_query(&serde_json::json!({
+            "dkg_memory": {
+                "query_operations": ["semantic_query"],
+                "semantic_query": {
+                    "scopes": ["current_channel"],
+                    "forms": ["select", "ask", "construct"]
+                }
+            }
+        })));
+        assert!(!nip11_dkg_semantic_query(&serde_json::json!({
+            "dkg_memory": { "query_operations": ["semantic_query"] }
+        })));
+        assert!(!nip11_dkg_semantic_query(&serde_json::json!({})));
     }
 
     #[test]
     fn memory_instructions_append_without_replacing_the_agent_persona() {
-        let prompt = append_dkg_memory_instructions(Some("You are Builder.".into()), Some(2))
-            .expect("enabled prompt");
+        let prompt = append_dkg_memory_instructions(
+            Some("You are Builder.".into()),
+            DkgCapabilities {
+                memory_schema: Some(2),
+                semantic_query: true,
+            },
+        )
+        .expect("enabled prompt");
         assert!(prompt.starts_with("You are Builder."));
         assert!(prompt.contains("buzz memory propose"));
         assert!(prompt.contains("dkg-software@1"));
@@ -4162,11 +4259,22 @@ mod dkg_memory_prompt_tests {
         assert!(prompt.contains("names are labels, never identity"));
         assert!(prompt.contains("agent-memory-v2"));
         assert!(prompt.contains("never hidden reasoning"));
+        assert!(prompt.contains("buzz memory query"));
+        assert!(prompt.contains("query_too_expensive"));
+        assert!(prompt.contains("LIMIT 25"));
+        assert!(prompt.contains("current Buzz channel's Context Graph"));
         assert_eq!(
-            append_dkg_memory_instructions(Some("persona".into()), None),
+            append_dkg_memory_instructions(Some("persona".into()), DkgCapabilities::default()),
             Some("persona".into())
         );
-        let legacy = append_dkg_memory_instructions(None, Some(1)).expect("legacy prompt");
+        let legacy = append_dkg_memory_instructions(
+            None,
+            DkgCapabilities {
+                memory_schema: Some(1),
+                semantic_query: false,
+            },
+        )
+        .expect("legacy prompt");
         assert!(legacy.contains("schemaVersion\":1"));
     }
 }
