@@ -7,6 +7,7 @@ import {
   RefreshCw,
   ShieldCheck,
   Sparkles,
+  Stethoscope,
   Users,
 } from "lucide-react";
 import { Badge } from "@/shared/ui/badge";
@@ -23,6 +24,7 @@ import {
 import { enableChannelMemory, explorerSource, nodeUiDeepLink } from "../api";
 import { DkgProviderError } from "../provider";
 import { CHANNEL_GRAPH_SCOPE } from "../topology/client";
+import { DkgDiagnostics } from "./DkgDiagnostics";
 import { EvidenceCard } from "./EvidenceCard";
 import { GraphOverlay } from "./GraphOverlay";
 import { MemorySearch } from "./MemorySearch";
@@ -64,6 +66,7 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
   const [graphSubgraph, setGraphSubgraph] = useState<string | null>(null);
   const [enabling, setEnabling] = useState(false);
   const [enableError, setEnableError] = useState<string | null>(null);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const trail = useContributorTrail(channelId, cg, trailPubkey);
   const gateFailed =
     Boolean(memory.data && memory.data.gate !== "ok") || memory.isError;
@@ -100,9 +103,27 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
     }
   }
 
+  const diagnosticsAction = (
+    <Button
+      type="button"
+      variant={diagnosticsOpen ? "secondary" : "ghost"}
+      size="icon-xs"
+      onClick={() => setDiagnosticsOpen((open) => !open)}
+      title="Test DKG connection"
+      aria-label="Test DKG connection"
+      data-testid="dkg-diagnostics-toggle"
+    >
+      <Stethoscope />
+    </Button>
+  );
+  const diagnosticsPanel = diagnosticsOpen ? (
+    <DkgDiagnostics channelId={channelId} />
+  ) : null;
+
   if (cgQuery.isLoading || memory.isLoading) {
     return (
-      <PanelShell>
+      <PanelShell action={diagnosticsAction}>
+        {diagnosticsPanel}
         <div className="space-y-3 p-1">
           <div className="h-20 animate-pulse rounded-xl bg-muted/60" />
           <div className="h-32 animate-pulse rounded-xl bg-muted/40" />
@@ -116,7 +137,8 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
 
   if (memory.isError && isUnknownChannel(memory.error)) {
     return (
-      <PanelShell>
+      <PanelShell action={diagnosticsAction}>
+        {diagnosticsPanel}
         <div className="flex min-h-[70vh] flex-col items-center justify-center px-5 text-center">
           <div className="mb-4 rounded-2xl bg-primary/10 p-4 text-primary">
             {enabling ? (
@@ -163,7 +185,8 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
   const data = memory.data;
   if (data?.gate !== "ok") {
     return (
-      <PanelShell>
+      <PanelShell action={diagnosticsAction}>
+        {diagnosticsPanel}
         <Card className="mb-3 p-3">
           <div className="flex items-start gap-2">
             <Database className="mt-0.5 h-4 w-4 text-amber-500" />
@@ -211,18 +234,22 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
   return (
     <PanelShell
       action={
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-xs"
-          onClick={() => void memory.refetch()}
-          disabled={memory.isFetching}
-          title="Refresh channel memory"
-        >
-          <RefreshCw className={memory.isFetching ? "animate-spin" : ""} />
-        </Button>
+        <div className="flex items-center gap-1">
+          {diagnosticsAction}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => void memory.refetch()}
+            disabled={memory.isFetching}
+            title="Refresh channel memory"
+          >
+            <RefreshCw className={memory.isFetching ? "animate-spin" : ""} />
+          </Button>
+        </div>
       }
     >
+      {diagnosticsPanel}
       <div className="mb-3 flex items-center gap-2">
         <Badge variant={providerIsGateway ? "info" : "success"}>
           {providerIsGateway ? "Community DKG" : "Your DKG node"}

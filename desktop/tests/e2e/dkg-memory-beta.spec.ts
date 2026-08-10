@@ -2,10 +2,23 @@ import { expect, test } from "@playwright/test";
 import { installMockBridge } from "../helpers/bridge";
 
 const CG = "buzz-test-channel";
+const AGENT_PUBKEY = "f".repeat(64);
+const AGENT_MESSAGE_ID = `mock-agents-managed-${AGENT_PUBKEY.slice(0, 8)}`;
+const AGENTS_CHANNEL_ID = "94a444a4-c0a3-5966-ab05-530c6ddc2301";
 
 test("channel memory exposes graph and authenticated search without named subgraphs", async ({
   page,
 }) => {
+  await page.route("http://localhost:3000/", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/nostr+json",
+      body: JSON.stringify({
+        supported_extensions: ["buzz-dkg-memory-v2"],
+        dkg_memory: { query_operations: ["channel_memory", "semantic_query"] },
+      }),
+    });
+  });
   await page.route("**/api/dkg/query", async (route) => {
     const request = route.request().postDataJSON() as {
       channelId: string;
@@ -111,6 +124,14 @@ test("channel memory exposes graph and authenticated search without named subgra
     timeout: 10_000,
   });
   await expect(panel.getByText(/0 named topics/i)).toBeVisible();
+
+  await panel.getByTestId("dkg-diagnostics-toggle").click();
+  await panel.getByRole("button", { name: "Run check" }).click();
+  await expect(panel.getByText("Relay capability")).toBeVisible();
+  await expect(panel.getByText("Buzz identity", { exact: true })).toBeVisible();
+  await expect(panel.getByText("Channel Context Graph")).toBeVisible();
+  await expect(panel.getByText("Semantic query")).toBeVisible();
+  await expect(panel.getByText(/weight 6\/40/i)).toBeVisible();
   await panel.screenshot({
     path: "test-results/dkg-memory-beta/panel-overview.png",
   });
@@ -230,5 +251,75 @@ test("a channel member can provision memory from the panel with visible provenan
     schemaVersion: 2,
     profiles: ["dkg-memory@1"],
     promptVersion: "channel-memory-enable-v1",
+  });
+});
+
+test("an agent response shows when its memory is stored", async ({ page }) => {
+  await installMockBridge(page, {
+    managedAgents: [
+      {
+        pubkey: AGENT_PUBKEY,
+        name: "Fizz",
+        status: "running",
+        channelNames: ["agents"],
+      },
+    ],
+  });
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(
+    () => typeof window.__BUZZ_E2E_SEED_OBSERVER_EVENTS__ === "function",
+  );
+  await page.getByTestId("channel-agents").click();
+  await expect(page.getByText("Fizz reporting in.")).toBeVisible();
+
+  await page.evaluate(
+    ({ agentPubkey, channelId, messageId }) => {
+      window.__BUZZ_E2E_SEED_OBSERVER_EVENTS__?.({
+        agentPubkey,
+        events: [
+          {
+            seq: 1,
+            timestamp: "2026-08-11T10:00:00Z",
+            kind: "acp_read",
+            agentIndex: 0,
+            channelId,
+            sessionId: "session-memory-status",
+            turnId: "turn-memory-status",
+            payload: {
+              method: "session/update",
+              params: {
+                sessionId: "session-memory-status",
+                update: {
+                  sessionUpdate: "tool_call_update",
+                  toolCallId: "memory-proposal",
+                  status: "completed",
+                  title: "shell",
+                  kind: "shell",
+                  rawInput: {
+                    command: `buzz memory propose --source ${messageId}`,
+                  },
+                  rawOutput: JSON.stringify({ state: "stored" }),
+                },
+              },
+            },
+          },
+        ],
+      });
+    },
+    {
+      agentPubkey: AGENT_PUBKEY,
+      channelId: AGENTS_CHANNEL_ID,
+      messageId: AGENT_MESSAGE_ID,
+    },
+  );
+
+  const fizzMessage = page
+    .getByTestId("message-row")
+    .filter({ hasText: "Fizz reporting in." });
+  await expect(fizzMessage.getByTestId("dkg-message-stored")).toHaveText(
+    "Stored in channel memory",
+  );
+  await fizzMessage.screenshot({
+    path: "test-results/dkg-memory-beta/message-stored.png",
   });
 });

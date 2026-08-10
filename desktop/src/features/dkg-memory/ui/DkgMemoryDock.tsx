@@ -19,7 +19,7 @@ export function DkgMemoryDock({ channelId }: { channelId: string | null }) {
           onClick={() => setOpen(false)}
           variant="ghost"
           size="icon-xs"
-          className="absolute right-3 top-[4.2rem] z-30"
+          className="absolute right-3 top-[4.2rem] z-50"
           title="Close channel memory"
           aria-label="Close channel memory"
         >
@@ -42,7 +42,7 @@ export function DkgMemoryDock({ channelId }: { channelId: string | null }) {
       {open ? (
         <aside
           data-testid="dkg-memory-panel"
-          className="absolute bottom-0 right-0 top-14 z-20 w-[420px] max-w-[calc(100vw-1rem)] border-l border-t border-border/70 bg-background/98 shadow-2xl backdrop-blur"
+          className="absolute bottom-0 right-0 top-14 z-40 w-[420px] max-w-[calc(100vw-1rem)] border-l border-t border-border/70 bg-background/98 shadow-2xl backdrop-blur"
         >
           <MemoryPanel channelId={channelId} />
         </aside>

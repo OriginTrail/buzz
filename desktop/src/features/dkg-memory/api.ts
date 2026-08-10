@@ -117,6 +117,23 @@ export interface SemanticQueryResult {
   layers: SemanticQueryLayer[];
 }
 
+export type DkgDiagnosticStatus = "pass" | "fail" | "skipped";
+
+export interface DkgDiagnosticCheck {
+  id: "relay" | "identity" | "graph" | "query";
+  label: string;
+  status: DkgDiagnosticStatus;
+  detail: string;
+  durationMs?: number;
+}
+
+export interface DkgDiagnosticReport {
+  checkedAt: string;
+  relay: string;
+  channelId: string;
+  checks: DkgDiagnosticCheck[];
+}
+
 export async function fetchSemanticQuery(
   channelId: string,
   sparql: string,
@@ -128,6 +145,130 @@ export async function fetchSemanticQuery(
     arguments: { sparql, view },
     localPath: null,
   });
+}
+
+function diagnosticError(cause: unknown): string {
+  if (cause instanceof Error && cause.message.trim()) return cause.message;
+  return "The check did not return a usable response.";
+}
+
+async function timedDiagnostic<T>(
+  run: () => Promise<T>,
+): Promise<{ value?: T; error?: string; durationMs: number }> {
+  const started = performance.now();
+  try {
+    return { value: await run(), durationMs: performance.now() - started };
+  } catch (cause) {
+    return {
+      error: diagnosticError(cause),
+      durationMs: performance.now() - started,
+    };
+  }
+}
+
+/**
+ * Exercise the same public, authenticated path the desktop and agents use.
+ * The report contains no credentials, graph IDs, or Nostr private material and
+ * is safe for a community member to copy into a support message.
+ */
+export async function runDkgDiagnostics(
+  channelId: string,
+): Promise<DkgDiagnosticReport> {
+  const relay = (await getRelayHttpUrl()).replace(/\/+$/, "");
+  const checks: DkgDiagnosticCheck[] = [];
+  const capability = await timedDiagnostic(async () => {
+    const response = await fetch(`${relay}/`, {
+      headers: { Accept: "application/nostr+json" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!response.ok)
+      throw new Error(`Relay discovery returned ${response.status}.`);
+    const document = (await response.json()) as {
+      supported_extensions?: unknown;
+      dkg_memory?: { query_operations?: unknown };
+    };
+    const extensions = Array.isArray(document.supported_extensions)
+      ? document.supported_extensions
+      : [];
+    const operations = Array.isArray(document.dkg_memory?.query_operations)
+      ? document.dkg_memory.query_operations
+      : [];
+    if (
+      !extensions.some((entry) =>
+        ["buzz-dkg-memory-v1", "buzz-dkg-memory-v2"].includes(String(entry)),
+      ) ||
+      !operations.includes("semantic_query")
+    ) {
+      throw new Error(
+        "Relay does not advertise the required DKG memory capabilities.",
+      );
+    }
+  });
+  checks.push({
+    id: "relay",
+    label: "Relay capability",
+    status: capability.error ? "fail" : "pass",
+    detail:
+      capability.error ?? "DKG memory and semantic queries are advertised.",
+    durationMs: Math.round(capability.durationMs),
+  });
+
+  const channel = await timedDiagnostic(() =>
+    fetchChannelMemory(channelId, null),
+  );
+  const channelReady = channel.value?.gate === "ok";
+  checks.push({
+    id: "identity",
+    label: "Buzz identity",
+    status: channel.error ? "fail" : "pass",
+    detail:
+      channel.error ??
+      "The relay accepted this app identity for an authenticated DKG request.",
+    durationMs: Math.round(channel.durationMs),
+  });
+  checks.push({
+    id: "graph",
+    label: "Channel Context Graph",
+    status: channelReady ? "pass" : "fail",
+    detail: channelReady
+      ? "The relay resolved this channel to an accessible Context Graph."
+      : channel.error
+        ? "The authenticated channel check could not complete."
+        : `The memory provider returned gate: ${channel.value?.gate ?? "unknown"}.`,
+    durationMs: Math.round(channel.durationMs),
+  });
+
+  if (channelReady) {
+    const query = await timedDiagnostic(() =>
+      fetchSemanticQuery(
+        channelId,
+        `PREFIX schema: <http://schema.org/>\nASK WHERE { GRAPH ?g { ?entity schema:name ?name . } }`,
+      ),
+    );
+    checks.push({
+      id: "query",
+      label: "Semantic query",
+      status: query.error ? "fail" : "pass",
+      detail:
+        query.error ??
+        `A bounded SPARQL health query completed${query.value?.cost ? ` (weight ${query.value.cost.score}/${query.value.cost.budget})` : ""}.`,
+      durationMs: Math.round(query.durationMs),
+    });
+  } else {
+    checks.push({
+      id: "query",
+      label: "Semantic query",
+      status: "skipped",
+      detail: "Skipped until channel access and graph resolution succeed.",
+    });
+  }
+
+  return {
+    checkedAt: new Date().toISOString(),
+    relay,
+    channelId,
+    checks,
+  };
 }
 
 async function sha256Hex(text: string): Promise<string> {

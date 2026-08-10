@@ -13,6 +13,7 @@ import {
 } from "@/features/messages/lib/canSendToChannel";
 import type { TimelineMessage } from "@/features/messages/types";
 import { useKnownAgentPubkeys } from "@/features/agents/useKnownAgentPubkeys";
+import { MessageMemoryStatus } from "@/features/dkg-memory/ui/MessageMemoryStatus";
 import { HuddleAttachment } from "@/features/huddle/components/HuddleAttachment";
 import { MessageReactions } from "@/features/messages/ui/MessageReactions";
 import { useReactionHandler } from "@/features/messages/ui/useReactionHandler";
@@ -675,6 +676,14 @@ export const MessageRow = React.memo(
       <>
         <SentFromThreadLine channelId={channelId} tags={message.tags} />
         {renderBody()}
+        {channelId && message.isAgent && message.signerPubkey ? (
+          <MessageMemoryStatus
+            agentName={message.author}
+            agentPubkey={message.signerPubkey}
+            channelId={channelId}
+            messageId={message.id}
+          />
+        ) : null}
         {continuationMetadataNode}
         <MessageReactions
           messageId={message.id}

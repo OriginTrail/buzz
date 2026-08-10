@@ -452,6 +452,20 @@ impl RestClient {
         }
         serde_json::from_str(&text).map_err(|e| RelayError::Http(e.to_string()))
     }
+
+    /// Run an authenticated, channel-scoped DKG gateway operation.
+    ///
+    /// The caller supplies the public gateway request shape, never a Context
+    /// Graph identifier. The relay resolves the graph after checking the
+    /// agent's community membership and channel access.
+    pub async fn query_dkg(&self, request: &Value) -> Result<Value, RelayError> {
+        let body_bytes = serde_json::to_vec(request)
+            .map_err(|e| RelayError::Http(format!("DKG query serialize error: {e}")))?;
+        let resp = self.bridge_post("/api/dkg/query", &body_bytes).await?;
+        resp.json()
+            .await
+            .map_err(|e| RelayError::Http(format!("DKG query response error: {e}")))
+    }
 }
 
 /// Events the harness cares about.
