@@ -14,7 +14,8 @@ export type DkgQueryOperation =
   | "decision_trace"
   | "subgraph_graph"
   | "subgraph_triples"
-  | "evidence";
+  | "evidence"
+  | "semantic_query";
 
 type DkgQueryArguments = {
   channel_memory: Record<string, never>;
@@ -32,6 +33,10 @@ type DkgQueryArguments = {
   subgraph_graph: { name: string };
   subgraph_triples: { name: string };
   evidence: { uri: string };
+  semantic_query: {
+    sparql: string;
+    view?: "both" | "shared" | "verified";
+  };
 };
 
 type ProviderQuery<Operation extends DkgQueryOperation> = {
@@ -49,6 +54,25 @@ type CommunityGatewayEnvelope = {
   operation: DkgQueryOperation;
   result: unknown;
 };
+
+export class DkgProviderError extends Error {
+  status: number;
+  code?: string;
+  details?: unknown;
+
+  constructor(
+    message: string,
+    status: number,
+    code?: string,
+    details?: unknown,
+  ) {
+    super(message);
+    this.name = "DkgProviderError";
+    this.status = status;
+    this.code = code;
+    this.details = details;
+  }
+}
 
 let resolvedLocalExplorer: string | null | undefined;
 let lastSource: ExplorerSource | null = null;
@@ -161,6 +185,7 @@ function adaptCommunityResult<Operation extends DkgQueryOperation>(
     case "decision_trace":
     case "subgraph_graph":
     case "subgraph_triples":
+    case "semantic_query":
       return { ...envelope.result, gate: "ok", cg: envelope.cg };
     case "evidence":
       return { ...envelope.result, gate: "ok" };
@@ -178,6 +203,9 @@ async function communityGatewayQuery<
   const body = JSON.stringify({
     channelId: query.channelId,
     operation: query.operation,
+    ...(query.operation === "semantic_query"
+      ? { scope: { type: "current_channel" } }
+      : {}),
     arguments: query.arguments,
   });
   const authEvent = await signRelayEvent({
@@ -201,11 +229,22 @@ async function communityGatewayQuery<
     signal: AbortSignal.timeout(QUERY_TIMEOUT_MS),
   });
   if (!response.ok) {
-    const error = (await response.json().catch(() => null)) as {
+    const payload = (await response.json().catch(() => null)) as {
       error?: unknown;
     } | null;
-    const detail = typeof error?.error === "string" ? `: ${error.error}` : "";
-    throw new Error(`community DKG query ${response.status}${detail}`);
+    const error = payload?.error;
+    const message =
+      typeof error === "string"
+        ? error
+        : isRecord(error) && typeof error.message === "string"
+          ? error.message
+          : `community DKG query failed (${response.status})`;
+    const code =
+      isRecord(error) && typeof error.code === "string"
+        ? error.code
+        : undefined;
+    const details = isRecord(error) ? error.details : undefined;
+    throw new DkgProviderError(message, response.status, code, details);
   }
   const envelope = validateEnvelope(await response.json(), query);
   return adaptCommunityResult(envelope) as Result;

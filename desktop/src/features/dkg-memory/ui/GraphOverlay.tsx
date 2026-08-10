@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 import { explorerSource } from "../api";
 import { useSubgraphGraph } from "../hooks";
 import { TopologyView } from "../topology/TopologyView";
+import { CHANNEL_GRAPH_SCOPE } from "../topology/client";
 import { GraphCanvas, type GraphSelection } from "./GraphCanvas";
 import { NodeUiResolve } from "./NodeUiResolve";
 
@@ -34,11 +35,14 @@ export function GraphOverlay({
   subgraph: string;
   onClose: () => void;
 }) {
-  const graph = useSubgraphGraph(channelId, cg, subgraph);
+  const channelWide = subgraph === CHANNEL_GRAPH_SCOPE;
+  const graph = useSubgraphGraph(channelId, cg, channelWide ? null : subgraph);
   const [selection, setSelection] = useState<GraphSelection | null>(null);
   // Spine is the first paint; topology (hexagonal RdfGraph) mounts only on
   // this explicit scoped action — per the repurpose wrap's acceptance gate.
-  const [mode, setMode] = useState<"spine" | "topology">("spine");
+  const [mode, setMode] = useState<"spine" | "topology">(
+    channelWide ? "topology" : "spine",
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -67,10 +71,12 @@ export function GraphOverlay({
     >
       <header className="flex items-center gap-3 border-b border-border py-2 pl-20 pr-4">
         <h2 className="text-sm font-semibold">
-          {subgraph}
-          <span className="ml-2 font-normal text-muted-foreground">
-            {decisionCount} decisions · {evidenceCount} evidence
-          </span>
+          {channelWide ? "Channel knowledge graph" : subgraph}
+          {!channelWide && (
+            <span className="ml-2 font-normal text-muted-foreground">
+              {decisionCount} decisions · {evidenceCount} evidence
+            </span>
+          )}
         </h2>
         {explorerSource() === "gateway" ? (
           <span className="rounded-md border border-sky-600/40 bg-sky-600/10 px-2 py-0.5 text-xs">
@@ -81,41 +87,45 @@ export function GraphOverlay({
             provenance checked by your node
           </span>
         )}
-        <div className="ml-2 flex items-center gap-2">
-          {(["WM", "SWM", "VM"] as const).map((tag) => (
-            <span
-              key={tag}
-              className="flex items-center gap-1 rounded-md border border-border bg-muted/30 px-1.5 py-0.5 text-2xs"
-              title={LAYER_META[tag].label}
-            >
+        {!channelWide && (
+          <div className="ml-2 flex items-center gap-2">
+            {(["WM", "SWM", "VM"] as const).map((tag) => (
               <span
-                className={`h-1.5 w-1.5 rounded-full ${LAYER_META[tag].dot}`}
-              />
-              {tag}
-              <span className="tabular-nums text-muted-foreground">
-                {layerCounts[tag]}
+                key={tag}
+                className="flex items-center gap-1 rounded-md border border-border bg-muted/30 px-1.5 py-0.5 text-2xs"
+                title={LAYER_META[tag].label}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${LAYER_META[tag].dot}`}
+                />
+                {tag}
+                <span className="tabular-nums text-muted-foreground">
+                  {layerCounts[tag]}
+                </span>
               </span>
-            </span>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
         <div className="flex-1" />
-        <div className="mr-2 flex rounded-md border border-border text-xs">
-          <button
-            type="button"
-            onClick={() => setMode("spine")}
-            className={`rounded-l-md px-2 py-1 ${mode === "spine" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
-          >
-            Traces
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode("topology")}
-            data-testid="dkg-topology-toggle"
-            className={`rounded-r-md px-2 py-1 ${mode === "topology" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
-          >
-            ⬡ Graph
-          </button>
-        </div>
+        {!channelWide && (
+          <div className="mr-2 flex rounded-md border border-border text-xs">
+            <button
+              type="button"
+              onClick={() => setMode("spine")}
+              className={`rounded-l-md px-2 py-1 ${mode === "spine" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+            >
+              Traces
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("topology")}
+              data-testid="dkg-topology-toggle"
+              className={`rounded-r-md px-2 py-1 ${mode === "topology" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+            >
+              ⬡ Graph
+            </button>
+          </div>
+        )}
         <button
           type="button"
           onClick={onClose}
@@ -128,17 +138,17 @@ export function GraphOverlay({
 
       <div className="flex min-h-0 flex-1">
         <main className="min-w-0 flex-1">
-          {graph.isLoading && (
+          {!channelWide && graph.isLoading && (
             <div className="p-6 text-sm text-muted-foreground">
               Reading subgraph through the DKG provider…
             </div>
           )}
-          {graph.isError && (
+          {!channelWide && graph.isError && (
             <div className="p-6 text-sm text-muted-foreground">
               Could not read this subgraph through the available DKG provider.
             </div>
           )}
-          {data && data.gate !== "ok" && (
+          {!channelWide && data && data.gate !== "ok" && (
             <div className="p-6 text-sm text-muted-foreground">
               This graph is unavailable through both the local node and the
               community DKG provider.

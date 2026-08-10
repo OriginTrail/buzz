@@ -3,6 +3,8 @@
 // a read-first "Catch up" side panel beside the conversation, toggled by a
 // floating chip. Self-contained so the ChannelPane diff stays one line.
 import { useState } from "react";
+import { BrainCircuit, X } from "lucide-react";
+import { Button } from "@/shared/ui/button";
 import { MemoryPanel } from "./MemoryPanel";
 
 export function DkgMemoryDock({ channelId }: { channelId: string | null }) {
@@ -10,19 +12,37 @@ export function DkgMemoryDock({ channelId }: { channelId: string | null }) {
   if (!channelId) return null;
   return (
     <>
-      <button
-        type="button"
-        data-testid="dkg-memory-toggle"
-        onClick={() => setOpen((v) => !v)}
-        className="absolute right-3 top-14 z-30 rounded-full border border-border bg-background/90 px-2.5 py-1 text-xs font-medium shadow-sm backdrop-blur transition-colors hover:bg-muted"
-        title="Channel memory (DKG)"
-      >
-        ◈ Memory
-      </button>
+      {open ? (
+        <Button
+          type="button"
+          data-testid="dkg-memory-toggle"
+          onClick={() => setOpen(false)}
+          variant="ghost"
+          size="icon-xs"
+          className="absolute right-3 top-[4.2rem] z-30"
+          title="Close channel memory"
+          aria-label="Close channel memory"
+        >
+          <X />
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          data-testid="dkg-memory-toggle"
+          onClick={() => setOpen(true)}
+          variant="outline"
+          size="sm"
+          className="absolute right-3 top-14 z-30 rounded-full bg-background/90 shadow-md backdrop-blur"
+          title="Open channel memory"
+        >
+          <BrainCircuit className="text-primary" />
+          Memory
+        </Button>
+      )}
       {open ? (
         <aside
           data-testid="dkg-memory-panel"
-          className="absolute bottom-0 right-0 top-14 z-20 w-[340px] border-l border-t border-border bg-background shadow-xl"
+          className="absolute bottom-0 right-0 top-14 z-20 w-[420px] max-w-[calc(100vw-1rem)] border-l border-t border-border/70 bg-background/98 shadow-2xl backdrop-blur"
         >
           <MemoryPanel channelId={channelId} />
         </aside>

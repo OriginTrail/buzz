@@ -1,4 +1,8 @@
 import { useState } from "react";
+import { Search } from "lucide-react";
+import { Button } from "@/shared/ui/button";
+import { Card } from "@/shared/ui/card";
+import { Input } from "@/shared/ui/input";
 import {
   fetchDecisionTrace,
   fetchSoftwareContributors,
@@ -17,6 +21,9 @@ export function SoftwareMemoryQuery({ channelId }: { channelId: string }) {
   const [repository, setRepository] = useState("");
   const [component, setComponent] = useState("");
   const [commitSha, setCommitSha] = useState("");
+  const [componentType, setComponentType] = useState<
+    "function" | "class" | "interface" | "file" | "package"
+  >("function");
   const [result, setResult] = useState<QueryResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -41,7 +48,7 @@ export function SoftwareMemoryQuery({ channelId }: { channelId: string }) {
             channelId,
             repositoryUrl,
             componentName,
-            "function",
+            componentType,
           ),
         });
       } else {
@@ -63,62 +70,82 @@ export function SoftwareMemoryQuery({ channelId }: { channelId: string }) {
   }
 
   return (
-    <section className="mb-3" data-testid="dkg-software-memory-query">
-      <h4 className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        Software knowledge
-      </h4>
-      <div className="mb-1 flex gap-1">
+    <section className="space-y-3" data-testid="dkg-software-memory-query">
+      <p className="text-2xs leading-relaxed text-muted-foreground">
+        Follow code provenance with stable repository and component identities.
+      </p>
+      <div className="flex gap-1.5">
         {(["contributors", "decisions"] as const).map((item) => (
-          <button
+          <Button
             key={item}
             type="button"
+            variant={mode === item ? "secondary" : "outline"}
+            size="xs"
             onClick={() => {
               setMode(item);
               setResult(null);
               setError(null);
             }}
-            className={`rounded-full border px-2 py-0.5 text-2xs ${mode === item ? "border-primary bg-primary/10" : "border-border bg-muted/30"}`}
           >
             {item === "contributors" ? "Who changed it?" : "Why this commit?"}
-          </button>
+          </Button>
         ))}
       </div>
-      <div className="flex flex-wrap gap-1">
-        <input
+      <div className="space-y-2">
+        <Input
           value={repository}
           onChange={(event) => setRepository(event.target.value)}
-          placeholder="Repository URL"
+          placeholder="https://github.com/owner/repository"
           aria-label="Repository URL"
-          className="min-w-48 flex-[2] rounded-md border border-border bg-muted/30 px-2 py-1 text-xs outline-none focus:border-primary/60"
         />
-        <input
-          value={component}
-          onChange={(event) => setComponent(event.target.value)}
-          placeholder={
-            mode === "contributors" ? "Function name" : "Component name"
-          }
-          aria-label={
-            mode === "contributors" ? "Function name" : "Component name"
-          }
-          className="min-w-0 flex-1 rounded-md border border-border bg-muted/30 px-2 py-1 text-xs outline-none focus:border-primary/60"
-        />
+        <div className="flex gap-2">
+          {mode === "contributors" && (
+            <select
+              value={componentType}
+              onChange={(event) =>
+                setComponentType(event.target.value as typeof componentType)
+              }
+              aria-label="Component type"
+              className="h-9 rounded-lg border border-input/40 bg-background px-2 text-xs outline-none focus:ring-1 focus:ring-ring"
+            >
+              <option value="function">Function</option>
+              <option value="class">Class</option>
+              <option value="interface">Interface</option>
+              <option value="file">File</option>
+              <option value="package">Package</option>
+            </select>
+          )}
+          <Input
+            value={component}
+            onChange={(event) => setComponent(event.target.value)}
+            placeholder="Component name"
+            aria-label="Component name"
+            className="min-w-0 flex-1"
+          />
+        </div>
         {mode === "decisions" && (
-          <input
+          <Input
             value={commitSha}
             onChange={(event) => setCommitSha(event.target.value)}
             placeholder="Commit SHA"
             aria-label="Commit SHA"
-            className="min-w-0 flex-1 rounded-md border border-border bg-muted/30 px-2 py-1 text-xs outline-none focus:border-primary/60"
           />
         )}
-        <button
+        <Button
           type="button"
           onClick={() => void runQuery()}
-          disabled={loading}
-          className="rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground disabled:opacity-50"
+          disabled={
+            loading ||
+            !repository.trim() ||
+            !component.trim() ||
+            (mode === "decisions" && !commitSha.trim())
+          }
+          size="sm"
+          className="w-full"
         >
-          {loading ? "…" : "Ask"}
-        </button>
+          <Search className={loading ? "animate-pulse" : ""} />
+          {loading ? "Searching…" : "Search software memory"}
+        </Button>
       </div>
       {error && <p className="mt-1 text-2xs text-destructive">{error}</p>}
       {result?.kind === "contributors" && (
@@ -127,9 +154,9 @@ export function SoftwareMemoryQuery({ channelId }: { channelId: string }) {
             <p className="text-muted-foreground">No matching edits found.</p>
           ) : (
             result.value.contributors.map((entry) => (
-              <div
+              <Card
                 key={`${entry.contributor}:${entry.commit}`}
-                className="rounded bg-muted/30 px-2 py-1"
+                className="px-2.5 py-2"
               >
                 <span className="font-medium">
                   {entry.contributorName ?? entry.contributor}
@@ -137,7 +164,7 @@ export function SoftwareMemoryQuery({ channelId }: { channelId: string }) {
                 <span className="ml-1 text-muted-foreground">
                   {entry.sha.slice(0, 10)} · {entry.layer}
                 </span>
-              </div>
+              </Card>
             ))
           )}
         </div>
@@ -150,10 +177,7 @@ export function SoftwareMemoryQuery({ channelId }: { channelId: string }) {
             </p>
           ) : (
             result.value.decisions.map((entry) => (
-              <div
-                key={entry.decision}
-                className="rounded bg-muted/30 px-2 py-1"
-              >
+              <Card key={entry.decision} className="px-2.5 py-2">
                 <p className="font-medium">
                   {entry.decisionName ?? entry.decision}
                 </p>
@@ -165,7 +189,7 @@ export function SoftwareMemoryQuery({ channelId }: { channelId: string }) {
                     Outcome: {entry.outcome}
                   </p>
                 )}
-              </div>
+              </Card>
             ))
           )}
         </div>

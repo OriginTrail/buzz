@@ -5,6 +5,7 @@
 // and display fallback; their Context Graph id is never sent as remote
 // authorization input.
 import { relayClient } from "@/shared/api/relayClient";
+import { getRelayHttpUrl, signRelayEvent } from "@/shared/api/tauri";
 import { queryDkgProvider } from "./provider";
 
 export {
@@ -95,6 +96,133 @@ export interface DecisionTrace {
   commitSha: string;
   componentName: string;
   decisions: DecisionTraceEntry[];
+}
+
+export interface SemanticQueryLayer {
+  layer: "SWM" | "VM";
+  bindings: Record<string, unknown>[];
+  quads?: unknown[];
+}
+
+export interface SemanticQueryResult {
+  gate: MemoryGate;
+  cg?: string;
+  queryType: "select" | "ask" | "construct";
+  scope: { type: "current_channel" };
+  cost?: {
+    score: number;
+    budget: number;
+    metrics?: Record<string, number>;
+  };
+  layers: SemanticQueryLayer[];
+}
+
+export async function fetchSemanticQuery(
+  channelId: string,
+  sparql: string,
+  view: "both" | "shared" | "verified" = "both",
+): Promise<SemanticQueryResult> {
+  return queryDkgProvider<SemanticQueryResult, "semantic_query">({
+    channelId,
+    operation: "semantic_query",
+    arguments: { sparql, view },
+    localPath: null,
+  });
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Deliberately start channel memory from a user action. The visible channel
+ * message is the proposal's provenance, while the existing integration lazily
+ * provisions the deterministic channel Context Graph when it accepts it.
+ */
+export async function enableChannelMemory(channelId: string): Promise<{
+  cg?: string;
+  operationId?: string | number;
+}> {
+  const source = await relayClient.sendMessage(
+    channelId,
+    "🧠 DKG memory was enabled for this channel.",
+  );
+  const proposal = await signRelayEvent({
+    kind: 40009,
+    content: JSON.stringify({
+      schemaVersion: 2,
+      profiles: ["dkg-memory@1"],
+      summary: "DKG memory was enabled for this Buzz channel.",
+      entities: [
+        {
+          id: "channel-memory",
+          type: "memory:Entity",
+          name: "Channel DKG memory",
+          description:
+            "DKG-backed semantic memory was enabled for this Buzz channel.",
+        },
+      ],
+      relations: [],
+      model: "buzz-dkg-beta-ui",
+      promptVersion: "channel-memory-enable-v1",
+    }),
+    tags: [
+      ["h", channelId],
+      ["t", "dkg-memory-proposal"],
+      ["e", source.id, "", "source"],
+    ],
+  });
+  const relayHttpOrigin = (await getRelayHttpUrl()).replace(/\/+$/, "");
+  const url = `${relayHttpOrigin}/api/dkg/memory`;
+  const body = JSON.stringify(proposal);
+  const authEvent = await signRelayEvent({
+    kind: 27235,
+    content: "",
+    tags: [
+      ["u", url],
+      ["method", "POST"],
+      ["payload", await sha256Hex(body)],
+      ["nonce", crypto.randomUUID()],
+    ],
+  });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Nostr ${btoa(JSON.stringify(authEvent))}`,
+      "Content-Type": "application/json",
+    },
+    body,
+    signal: AbortSignal.timeout(25_000),
+  });
+  const result = (await response.json().catch(() => null)) as {
+    cg?: string;
+    operationId?: string | number;
+    error?: unknown;
+  } | null;
+  if (!response.ok) {
+    const structured =
+      result?.error &&
+      typeof result.error === "object" &&
+      "message" in result.error &&
+      typeof (result.error as { message?: unknown }).message === "string"
+        ? (result.error as { message: string }).message
+        : null;
+    const message =
+      typeof result?.error === "string"
+        ? result.error
+        : structured
+          ? structured
+          : "Could not start DKG memory for this channel.";
+    throw new Error(message);
+  }
+  return result ?? {};
 }
 
 /**

@@ -5,9 +5,11 @@ import test, { afterEach } from "node:test";
 import {
   fetchChannelMemory,
   fetchDecisionTrace,
+  fetchSemanticQuery,
   fetchSoftwareContributors,
 } from "./api.ts";
 import {
+  DkgProviderError,
   explorerSource,
   queryDkgProvider,
   resetDkgMemoryProvider,
@@ -118,6 +120,71 @@ test("community gateway uses active relay URL and a fresh payload-bound NIP-98 e
     );
   }
   assert.notEqual(nonces[0], nonces[1]);
+});
+
+test("semantic queries are explicitly current-channel scoped and expose their cost", async () => {
+  installTauri();
+  let requestBody;
+  globalThis.fetch = async (_url, init) => {
+    requestBody = JSON.parse(String(init.body));
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        channelId: CHANNEL_ID,
+        cg: "semantic-cg",
+        operation: "semantic_query",
+        result: {
+          queryType: "select",
+          scope: { type: "current_channel" },
+          cost: { score: 3, budget: 40 },
+          layers: [{ layer: "SWM", bindings: [] }],
+        },
+      }),
+    );
+  };
+
+  const result = await fetchSemanticQuery(
+    CHANNEL_ID,
+    "SELECT ?s WHERE { GRAPH ?g { ?s ?p ?o } } LIMIT 10",
+  );
+  assert.deepEqual(requestBody, {
+    channelId: CHANNEL_ID,
+    operation: "semantic_query",
+    scope: { type: "current_channel" },
+    arguments: {
+      sparql: "SELECT ?s WHERE { GRAPH ?g { ?s ?p ?o } } LIMIT 10",
+      view: "both",
+    },
+  });
+  assert.equal(result.cg, "semantic-cg");
+  assert.equal(result.gate, "ok");
+  assert.equal(result.cost.score, 3);
+});
+
+test("structured DKG errors retain a useful code and message", async () => {
+  installTauri();
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        ok: false,
+        error: {
+          code: "unknown_channel",
+          message: "channel is not configured for DKG queries",
+        },
+      }),
+      { status: 404 },
+    );
+
+  await assert.rejects(
+    () => fetchChannelMemory(CHANNEL_ID, null),
+    (error) => {
+      assert.equal(error instanceof DkgProviderError, true);
+      assert.equal(error.status, 404);
+      assert.equal(error.code, "unknown_channel");
+      assert.equal(error.message, "channel is not configured for DKG queries");
+      return true;
+    },
+  );
 });
 
 test("provider falls back from local to community and reset re-probes local", async () => {

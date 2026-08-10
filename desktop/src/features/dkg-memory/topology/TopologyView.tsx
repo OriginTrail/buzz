@@ -13,7 +13,7 @@
 // not verification).
 import { Suspense, lazy, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchTopologyTriples } from "./client";
+import { CHANNEL_GRAPH_SCOPE, fetchTopologyTriples } from "./client";
 import {
   applyHeaviestSubjectsCap,
   attributionLegend,
@@ -85,6 +85,7 @@ export function TopologyView({
   const [colorMode, setColorMode] = useState<"entity" | "attribution">(
     "entity",
   );
+  const channelWide = subgraph === CHANNEL_GRAPH_SCOPE;
   const query = useQuery({
     queryKey: ["dkg-memory", "topology", channelId, cg, subgraph],
     queryFn: () => fetchTopologyTriples(channelId, cg, subgraph),
@@ -142,13 +143,15 @@ export function TopologyView({
           >
             Entity types
           </button>
-          <button
-            type="button"
-            onClick={() => setColorMode("attribution")}
-            className={`rounded-r-md px-2 py-0.5 ${colorMode === "attribution" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
-          >
-            Contributors
-          </button>
+          {!channelWide && (
+            <button
+              type="button"
+              onClick={() => setColorMode("attribution")}
+              className={`rounded-r-md px-2 py-0.5 ${colorMode === "attribution" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+            >
+              Contributors
+            </button>
+          )}
         </span>
         {colorMode === "attribution" &&
           shaped.legend.map((l) => (
@@ -167,9 +170,11 @@ export function TopologyView({
             </span>
           ))}
         <span className="ml-auto text-2xs text-muted-foreground">
-          {colorMode === "attribution"
-            ? "colors = recorded attribution, not verification"
-            : "colors = entity types, as in your DKG node"}
+          {channelWide
+            ? "bounded channel view · use search to narrow further"
+            : colorMode === "attribution"
+              ? "colors = recorded attribution, not verification"
+              : "colors = entity types, as in your DKG node"}
           {shaped.dropped > 0 && ` · ${shaped.dropped} triples beyond cap`}
         </span>
       </div>

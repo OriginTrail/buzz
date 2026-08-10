@@ -26,10 +26,7 @@ async function waitForMockLiveSubscription(
     .toBe(true);
 }
 
-async function emit(
-  page: import("@playwright/test").Page,
-  content: string,
-) {
+async function emit(page: import("@playwright/test").Page, content: string) {
   const event = await page.evaluate(
     (payload) =>
       window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__?.({
@@ -69,10 +66,10 @@ test.describe("dkg memory panel demo", () => {
     await page.getByTestId("dkg-memory-toggle").click();
     const panel = page.getByTestId("dkg-memory-panel");
     await expect(panel).toBeVisible();
-    await expect(panel.getByText("Verified through your node")).toBeVisible({
+    await expect(panel.getByText("Your DKG node")).toBeVisible({
       timeout: 20_000,
     });
-    await expect(panel.getByText(/what this channel remembers/i)).toBeVisible({
+    await expect(panel.getByTestId("dkg-channel-graph")).toBeVisible({
       timeout: 20_000,
     });
     await waitForAnimations(page);
@@ -88,7 +85,9 @@ test.describe("dkg memory panel demo", () => {
         timeout: 20_000,
       });
       await expect(
-        panel.getByText(/derived from|source|sha256|assertion|evidence/i).first(),
+        panel
+          .getByText(/derived from|source|sha256|assertion|evidence/i)
+          .first(),
       ).toBeVisible({ timeout: 20_000 });
       await waitForAnimations(page);
       await panel.screenshot({ path: `${SHOTS}/06-evidence-trail.png` });
@@ -99,8 +98,11 @@ test.describe("dkg memory panel demo", () => {
     // Contributor trail drill-in.
     const chip = panel.locator("button", { hasText: "…" }).first();
     await chip.click();
-    await expect(panel.getByText(/loading trail|fed decision|structured entity|\d{4}/).first())
-      .toBeVisible({ timeout: 20_000 });
+    await expect(
+      panel
+        .getByText(/loading trail|fed decision|structured entity|\d{4}/)
+        .first(),
+    ).toBeVisible({ timeout: 20_000 });
     await waitForAnimations(page);
     await panel.screenshot({ path: `${SHOTS}/04-contributor-trail.png` });
   });
@@ -116,7 +118,7 @@ test.describe("dkg memory panel demo", () => {
     await emit(page, DELIBERATION[4]); // one receipt to bind the CG
     await page.getByTestId("dkg-memory-toggle").click();
     const panel = page.getByTestId("dkg-memory-panel");
-    await expect(panel.getByText(/what this channel remembers/i)).toBeVisible({
+    await expect(panel.getByTestId("dkg-channel-graph")).toBeVisible({
       timeout: 20_000,
     });
     // Open a real subgraph as graph.
@@ -136,9 +138,9 @@ test.describe("dkg memory panel demo", () => {
       .locator("button")
       .first()
       .click();
-    await expect(
-      overlay.getByText(/resolve in your node ui/i),
-    ).toBeVisible({ timeout: 10_000 });
+    await expect(overlay.getByText(/resolve in your node ui/i)).toBeVisible({
+      timeout: 10_000,
+    });
     // Switch to the node-parity Graph mode.
     await overlay.getByTestId("dkg-topology-toggle").click();
     await expect(
@@ -156,6 +158,86 @@ test.describe("dkg memory panel demo", () => {
     await overlay.screenshot({ path: `${SHOTS}/10-graph-contributors.png` });
   });
 
+  test("gallery: extra Traces + Graph captures", async ({ page }) => {
+    await page.addInitScript((cg) => {
+      window.localStorage.setItem("dkg-memory-cg-override", cg);
+    }, WOT_CG);
+    await installMockBridge(page);
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.getByTestId("channel-engineering").click();
+    await waitForMockLiveSubscription(page, CHANNEL);
+    await emit(page, DELIBERATION[4]);
+    await page.getByTestId("dkg-memory-toggle").click();
+    const panel = page.getByTestId("dkg-memory-panel");
+    await expect(panel.getByTestId("dkg-channel-graph")).toBeVisible({
+      timeout: 20_000,
+    });
+
+    // ── Traces gallery (openclaw) ──
+    await page.getByTestId("dkg-subgraph-openclaw").click();
+    const overlay = page.getByTestId("dkg-graph-overlay");
+    await expect(overlay.getByTestId("traces-card").first()).toBeVisible({
+      timeout: 25_000,
+    });
+    // expanded card: full text + all evidence rows
+    const firstCard = overlay.getByTestId("traces-card").first();
+    await firstCard.getByRole("button", { name: "Expand" }).click();
+    await waitForAnimations(page);
+    await overlay.screenshot({ path: `${SHOTS}/11-traces-expanded.png` });
+    await firstCard.getByRole("button", { name: "Collapse" }).click();
+    // selection -> evidence rail with the resolve affordance
+    await firstCard.locator("button").first().click();
+    await expect(
+      overlay.getByText(/resolve in your node ui|resolve in node ui/i),
+    ).toBeVisible({ timeout: 15_000 });
+    await waitForAnimations(page);
+    await overlay.screenshot({ path: `${SHOTS}/12-traces-evidence-rail.png` });
+    // compact density
+    await overlay.getByRole("button", { name: "compact", exact: true }).click();
+    await waitForAnimations(page);
+    await overlay.screenshot({ path: `${SHOTS}/13-traces-compact.png` });
+    await overlay
+      .getByRole("button", { name: "comfortable", exact: true })
+      .click();
+
+    // ── Graph gallery ──
+    await overlay.getByTestId("dkg-topology-toggle").click();
+    await expect(overlay.locator("canvas").first()).toBeVisible({
+      timeout: 30_000,
+    });
+    await page.waitForTimeout(2500);
+    // zoom in so humanized labels render
+    const canvas = overlay.locator("canvas").first();
+    const box = await canvas.boundingBox();
+    if (box) {
+      const cx = box.x + box.width / 2;
+      const cy = box.y + box.height / 2;
+      await page.mouse.move(cx, cy);
+      for (let i = 0; i < 5; i++) {
+        await page.mouse.wheel(0, -240);
+        await page.waitForTimeout(250);
+      }
+      await page.waitForTimeout(1200);
+    }
+    await overlay.screenshot({ path: `${SHOTS}/14-graph-zoom-labels.png` });
+    await overlay.getByRole("button", { name: "close", exact: false }).click();
+
+    // ── decisions sub-graph: the big graph ──
+    await page.getByTestId("dkg-subgraph-decisions").click();
+    const overlay2 = page.getByTestId("dkg-graph-overlay");
+    await expect(overlay2.getByTestId("traces-card").first()).toBeVisible({
+      timeout: 30_000,
+    });
+    await waitForAnimations(page);
+    await overlay2.screenshot({ path: `${SHOTS}/15-traces-decisions.png` });
+    await overlay2.getByTestId("dkg-topology-toggle").click();
+    await expect(overlay2.locator("canvas").first()).toBeVisible({
+      timeout: 40_000,
+    });
+    await page.waitForTimeout(3500);
+    await overlay2.screenshot({ path: `${SHOTS}/16-graph-decisions.png` });
+  });
+
   test("community gateway fallback resolves full memory", async ({ page }) => {
     await page.addInitScript((cg) => {
       window.localStorage.setItem("dkg-memory-cg-override", cg);
@@ -171,10 +253,10 @@ test.describe("dkg memory panel demo", () => {
     }
     await page.getByTestId("dkg-memory-toggle").click();
     const panel = page.getByTestId("dkg-memory-panel");
-    await expect(
-      panel.getByText(/resolved through the community dkg provider/i),
-    ).toBeVisible({ timeout: 25_000 });
-    await expect(panel.getByText(/what this channel remembers/i)).toBeVisible({
+    await expect(panel.getByText("Community DKG")).toBeVisible({
+      timeout: 25_000,
+    });
+    await expect(panel.getByTestId("dkg-channel-graph")).toBeVisible({
       timeout: 25_000,
     });
     await waitForAnimations(page);
@@ -197,8 +279,9 @@ test.describe("dkg memory panel demo", () => {
     }
     await page.getByTestId("dkg-memory-toggle").click();
     const panel = page.getByTestId("dkg-memory-panel");
-    await expect(panel.getByText("Shown for discovery", { exact: false }))
-      .toBeVisible({ timeout: 20_000 });
+    await expect(panel.getByText("Memory provider unavailable")).toBeVisible({
+      timeout: 20_000,
+    });
     await waitForAnimations(page);
     await panel.screenshot({ path: `${SHOTS}/05-discovery-fallback.png` });
   });
