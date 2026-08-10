@@ -148,6 +148,7 @@ async function sha256Hex(text: string): Promise<string> {
 export async function enableChannelMemory(channelId: string): Promise<{
   cg?: string;
   operationId?: string | number;
+  state?: string;
 }> {
   const source = await relayClient.sendMessage(
     channelId,
@@ -181,13 +182,60 @@ export async function enableChannelMemory(channelId: string): Promise<{
   const relayHttpOrigin = (await getRelayHttpUrl()).replace(/\/+$/, "");
   const url = `${relayHttpOrigin}/api/dkg/memory`;
   const body = JSON.stringify(proposal);
+  const payloadHash = await sha256Hex(body);
+  const deadline = Date.now() + 120_000;
+  let result: MemoryProvisioningResponse | null = null;
+  do {
+    result = await postMemoryProposal(url, body, payloadHash);
+    if (isMemoryStored(result.state) || !isMemoryProcessing(result.state)) {
+      return {
+        ...result,
+        cg: result.cg ?? result.contextGraphId,
+      };
+    }
+    if (Date.now() >= deadline) break;
+    await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+  } while (Date.now() < deadline);
+
+  throw new Error(
+    "DKG memory was accepted and is still provisioning. Keep this panel open and refresh shortly.",
+  );
+}
+
+interface MemoryProvisioningResponse {
+  cg?: string;
+  contextGraphId?: string;
+  operationId?: string | number;
+  state?: string;
+  error?: unknown;
+}
+
+function isMemoryStored(state: string | undefined): boolean {
+  return state === "stored" || state === "receipted";
+}
+
+function isMemoryProcessing(state: string | undefined): boolean {
+  return (
+    state === "processing" ||
+    state === "distilled" ||
+    state === "wm_written" ||
+    state === "finalized" ||
+    state === "shared"
+  );
+}
+
+async function postMemoryProposal(
+  url: string,
+  body: string,
+  payloadHash: string,
+): Promise<MemoryProvisioningResponse> {
   const authEvent = await signRelayEvent({
     kind: 27235,
     content: "",
     tags: [
       ["u", url],
       ["method", "POST"],
-      ["payload", await sha256Hex(body)],
+      ["payload", payloadHash],
       ["nonce", crypto.randomUUID()],
     ],
   });
@@ -201,11 +249,9 @@ export async function enableChannelMemory(channelId: string): Promise<{
     body,
     signal: AbortSignal.timeout(25_000),
   });
-  const result = (await response.json().catch(() => null)) as {
-    cg?: string;
-    operationId?: string | number;
-    error?: unknown;
-  } | null;
+  const result = (await response
+    .json()
+    .catch(() => null)) as MemoryProvisioningResponse | null;
   if (!response.ok) {
     const structured =
       result?.error &&
@@ -222,7 +268,16 @@ export async function enableChannelMemory(channelId: string): Promise<{
           : "Could not start DKG memory for this channel.";
     throw new Error(message);
   }
-  return result ?? {};
+  return {
+    ...(result ?? {}),
+    state:
+      result?.state ??
+      (response.status === 202
+        ? "processing"
+        : response.status === 200
+          ? "stored"
+          : undefined),
+  };
 }
 
 /**

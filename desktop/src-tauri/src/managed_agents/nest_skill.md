@@ -17,6 +17,8 @@ version: 1
 
 `BUZZ_AUTH_TAG` is required for `buzz agents draft-create` and `buzz agents draft-update` because those commands send owner-reviewed Desktop drafts. If missing, explain that this managed agent cannot open owner-reviewed agent drafts from chat.
 
+Relay-backed `buzz` commands require outbound network access. In a Codex runtime that exposes `sandbox_permissions`, request `require_escalated` on the first relay-backed command instead of first attempting a known-blocked sandbox call. Buzz handles the permission inside the agent's configured access boundary. Local-only commands such as `buzz mem`, `buzz pack`, and `--help` do not need network access.
+
 Run the bundled CLI with `--help` and `<command> <subcommand> --help` to discover all flags, arguments, and usage. This skill documents only what `--help` cannot tell you.
 
 ## Conversational Agent Management

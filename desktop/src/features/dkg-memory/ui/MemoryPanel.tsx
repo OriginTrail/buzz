@@ -119,15 +119,21 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
       <PanelShell>
         <div className="flex min-h-[70vh] flex-col items-center justify-center px-5 text-center">
           <div className="mb-4 rounded-2xl bg-primary/10 p-4 text-primary">
-            <BrainCircuit className="h-8 w-8" />
+            {enabling ? (
+              <RefreshCw className="h-8 w-8 animate-spin" />
+            ) : (
+              <BrainCircuit className="h-8 w-8" />
+            )}
           </div>
           <h3 className="text-base font-semibold">
-            Give this channel a memory
+            {enabling
+              ? "Preparing this channel’s Context Graph…"
+              : "Give this channel a memory"}
           </h3>
           <p className="mt-2 max-w-xs text-sm leading-relaxed text-muted-foreground">
-            Start a private Context Graph for this channel. Agents can then add
-            decisions, people, code, tasks and their relationships as the team
-            works.
+            {enabling
+              ? "The relay accepted the signed setup record. It is creating, sharing and checking the graph before Buzz starts querying it."
+              : "Start a private Context Graph for this channel. Agents can then add decisions, people, code, tasks and their relationships as the team works."}
           </p>
           <Button
             type="button"
@@ -136,12 +142,13 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
             onClick={() => void startMemory()}
             data-testid="dkg-memory-enable"
           >
-            <Sparkles className={enabling ? "animate-pulse" : ""} />
-            {enabling ? "Starting memory…" : "Start channel memory"}
+            {enabling ? <RefreshCw className="animate-spin" /> : <Sparkles />}
+            {enabling ? "Provisioning Context Graph…" : "Start channel memory"}
           </Button>
           <p className="mt-3 text-2xs text-muted-foreground">
-            Buzz posts a visible setup message, signs the first memory record,
-            and the relay provisions the graph.
+            {enabling
+              ? "This can take up to a minute on a busy node. You can keep using the channel."
+              : "Buzz posts a visible setup message, signs the first memory record, and the relay provisions the graph."}
           </p>
           {enableError && (
             <p className="mt-3 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">

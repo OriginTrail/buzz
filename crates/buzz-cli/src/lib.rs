@@ -1819,6 +1819,13 @@ pub enum MemoryCmd {
         /// JSON proposal file, or '-' to read JSON from stdin
         #[arg(long, default_value = "-")]
         input: String,
+        /// Wait for the accepted proposal to become queryable (0 returns immediately)
+        #[arg(
+            long,
+            default_value_t = 120,
+            value_parser = clap::value_parser!(u64).range(0..=600)
+        )]
+        wait_seconds: u64,
     },
     /// Run a safe, read-only SPARQL query against the current channel's DKG memory
     Query {

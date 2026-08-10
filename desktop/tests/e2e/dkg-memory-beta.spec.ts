@@ -148,6 +148,7 @@ test("a channel member can provision memory from the panel with visible provenan
   page,
 }) => {
   let provisioned = false;
+  let proposalCalls = 0;
   let proposal: { kind?: number; tags?: string[][]; content?: string } | null =
     null;
   await page.route("**/api/dkg/query", async (route) => {
@@ -188,11 +189,16 @@ test("a channel member can provision memory from the panel with visible provenan
   });
   await page.route("**/api/dkg/memory", async (route) => {
     proposal = route.request().postDataJSON() as typeof proposal;
-    provisioned = true;
+    proposalCalls += 1;
+    provisioned = proposalCalls >= 2;
     await route.fulfill({
-      status: 202,
+      status: provisioned ? 200 : 202,
       contentType: "application/json",
-      body: JSON.stringify({ cg: CG, operationId: 42 }),
+      body: JSON.stringify({
+        contextGraphId: CG,
+        operationId: 42,
+        state: provisioned ? "stored" : "processing",
+      }),
     });
   });
 
@@ -205,9 +211,13 @@ test("a channel member can provision memory from the panel with visible provenan
   const enable = panel.getByTestId("dkg-memory-enable");
   await expect(enable).toBeVisible({ timeout: 10_000 });
   await enable.click();
+  await expect(
+    panel.getByText("Preparing this channel’s Context Graph…"),
+  ).toBeVisible();
   await expect(panel.getByTestId("dkg-channel-graph")).toBeVisible({
     timeout: 10_000,
   });
+  expect(proposalCalls).toBe(2);
 
   expect(proposal?.kind).toBe(40009);
   expect(proposal?.tags).toEqual(
