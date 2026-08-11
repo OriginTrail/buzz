@@ -10,7 +10,7 @@ import { fetchDkgMemoryCapabilities } from "./capabilities";
 import { postAuthenticatedDkgJson, queryDkgProvider } from "./provider";
 import {
   memoryProposalProgress,
-  normalizedMemoryProposalState,
+  normalizeMemoryProposalResponse,
 } from "./proposalState";
 
 export {
@@ -332,15 +332,9 @@ async function postMemoryProposal(
       path: "/api/dkg/memory",
       body,
     });
-  const publicState =
-    normalizedMemoryProposalState(result.state) ??
-    (status === 202 ? "processing" : status === 200 ? "stored" : undefined);
   return {
     ...result,
-    internalState:
-      result.internalState ??
-      (publicState && result.state !== publicState ? result.state : undefined),
-    state: publicState,
+    ...normalizeMemoryProposalResponse(result, status),
   };
 }
 

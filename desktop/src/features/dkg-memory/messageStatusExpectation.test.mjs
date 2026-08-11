@@ -10,6 +10,35 @@ const dom = new JSDOM("<!doctype html><html><body></body></html>", {
 const originalFetch = globalThis.fetch;
 let queryClient;
 
+function storedObserverEvent(channelId, messageId) {
+  return {
+    seq: 1,
+    timestamp: "2026-08-11T08:00:00.000Z",
+    kind: "acp_read",
+    agentIndex: 0,
+    channelId,
+    sessionId: "session-one",
+    turnId: "turn-one",
+    payload: {
+      method: "session/update",
+      params: {
+        sessionId: "session-one",
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "memory-tool",
+          status: "completed",
+          title: "shell",
+          kind: "shell",
+          rawInput: {
+            command: `buzz memory propose --source ${messageId}`,
+          },
+          rawOutput: '{"state":"stored"}',
+        },
+      },
+    },
+  };
+}
+
 before(() => {
   Object.assign(globalThis, {
     document: dom.window.document,
@@ -115,32 +144,7 @@ test("a mounted channel retries capabilities, subscribes, and reveals observer m
   await waitFor(() => assert.equal(subscriptions, 1), { timeout: 2_000 });
   await act(async () => {
     injectObserverEventsForE2E(pubkey, [
-      {
-        seq: 1,
-        timestamp: "2026-08-11T08:00:00.000Z",
-        kind: "acp_read",
-        agentIndex: 0,
-        channelId,
-        sessionId: "session-one",
-        turnId: "turn-one",
-        payload: {
-          method: "session/update",
-          params: {
-            sessionId: "session-one",
-            update: {
-              sessionUpdate: "tool_call_update",
-              toolCallId: "memory-tool",
-              status: "completed",
-              title: "shell",
-              kind: "shell",
-              rawInput: {
-                command: `buzz memory propose --source ${messageId}`,
-              },
-              rawOutput: '{"state":"stored"}',
-            },
-          },
-        },
-      },
+      storedObserverEvent(channelId, messageId),
     ]);
   });
   await waitFor(
@@ -149,4 +153,74 @@ test("a mounted channel retries capabilities, subscribes, and reveals observer m
   );
   assert.equal(fetches, 2);
   assert.equal(subscriptions, 1);
+});
+
+test("a mounted non-DKG relay suppresses badges and observer subscription", async () => {
+  const React = await import("react");
+  const { QueryClient, QueryClientProvider } = await import(
+    "@tanstack/react-query"
+  );
+  const { render, waitFor } = await import("@testing-library/react");
+  const { useMessageMemoryStatusMap } = await import("./messageStatusMap.ts");
+  const { relayClient } = await import("@/shared/api/relayClient");
+  const { injectObserverEventsForE2E, resetAgentObserverStore } = await import(
+    "@/features/agents/observerRelayStore"
+  );
+  resetAgentObserverStore();
+  let subscriptions = 0;
+  mock.method(relayClient, "subscribeLive", async () => {
+    subscriptions += 1;
+    return async () => {};
+  });
+  globalThis.fetch = async () => ({
+    ok: true,
+    json: async () => ({ supported_extensions: [] }),
+  });
+
+  const channelId = "channel-without-dkg";
+  const messageId = "d".repeat(64);
+  const pubkey = "a".repeat(64);
+  const message = {
+    id: messageId,
+    author: "Fizz",
+    isAgent: true,
+    signerPubkey: pubkey,
+  };
+  injectObserverEventsForE2E(pubkey, [
+    storedObserverEvent(channelId, messageId),
+  ]);
+
+  function Harness() {
+    const status = useMessageMemoryStatusMap(channelId, [message]).get(
+      messageId,
+    )?.status;
+    return React.createElement(
+      "span",
+      { "data-testid": "memory" },
+      status ?? "none",
+    );
+  }
+
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { gcTime: Number.POSITIVE_INFINITY } },
+  });
+  const view = render(
+    React.createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      React.createElement(Harness),
+    ),
+  );
+  await waitFor(() =>
+    assert.deepEqual(
+      queryClient.getQueryData([
+        "dkg-memory",
+        "capabilities",
+        "https://relay.example",
+      ]),
+      { memory: false, semanticQuery: false },
+    ),
+  );
+  assert.equal(view.getByTestId("memory").textContent, "none");
+  assert.equal(subscriptions, 0);
 });

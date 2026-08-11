@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import proposalStates from "../../../../shared/dkg-memory/proposal-states.json" with {
+  type: "json",
+};
 import { memoryStatusForMessage } from "./messageStatus.ts";
 import {
   advertisesDkgMemory,
   advertisesDkgSemanticQuery,
 } from "./capabilities.ts";
 import { buildMessageMemoryStatusMap } from "./messageStatusMap.ts";
+import {
+  memoryProposalProgress,
+  normalizeMemoryProposalResponse,
+} from "./proposalState.ts";
 
 const CHANNEL = "channel-one";
 const MESSAGE = "a".repeat(64);
@@ -162,7 +169,7 @@ test("display text and unrelated result IDs cannot impersonate structured teleme
   );
 });
 
-test("a non-DKG relay never marks ordinary agent messages as memory failures", () => {
+test("the map helper suppresses badges when its capability gate is closed", () => {
   const message = {
     id: MESSAGE,
     author: "Fizz",
@@ -176,6 +183,37 @@ test("a non-DKG relay never marks ordinary agent messages as memory failures", (
     new Map(),
   );
   assert.equal(statuses.size, 0);
+});
+
+test("every shared beta processing phase remains an in-flight recording", () => {
+  for (const state of proposalStates.processing) {
+    assert.equal(memoryProposalProgress(state), "processing", state);
+    assert.equal(
+      memoryStatusForMessage(
+        [tool({ result: JSON.stringify({ state }) })],
+        CHANNEL,
+        MESSAGE,
+      ),
+      "recording",
+      state,
+    );
+  }
+});
+
+test("provisioning normalization preserves raw beta lifecycle phases", () => {
+  for (const state of proposalStates.processing) {
+    assert.deepEqual(normalizeMemoryProposalResponse({ state }, 202), {
+      internalState: state === "processing" ? undefined : state,
+      state: "processing",
+    });
+  }
+  assert.deepEqual(
+    normalizeMemoryProposalResponse(
+      { state: "distilled", internalState: "relay-phase" },
+      202,
+    ),
+    { internalState: "relay-phase", state: "processing" },
+  );
 });
 
 test("the channel-level map derives each agent status from one shared pass", () => {

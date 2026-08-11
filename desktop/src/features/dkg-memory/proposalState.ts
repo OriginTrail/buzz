@@ -24,3 +24,18 @@ export function normalizedMemoryProposalState(
   const progress = memoryProposalProgress(state);
   return progress === "unknown" ? undefined : progress;
 }
+
+export function normalizeMemoryProposalResponse(
+  result: { internalState?: string; state?: string },
+  status: number,
+): { internalState?: string; state?: string } {
+  const publicState =
+    normalizedMemoryProposalState(result.state) ??
+    (status === 202 ? "processing" : status === 200 ? "stored" : undefined);
+  return {
+    internalState:
+      result.internalState ??
+      (publicState && result.state !== publicState ? result.state : undefined),
+    state: publicState,
+  };
+}

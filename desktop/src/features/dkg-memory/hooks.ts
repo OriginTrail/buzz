@@ -9,19 +9,29 @@ import { fetchDkgMemoryCapabilities } from "./capabilities";
 
 const CAPABILITY_RETRY_DELAYS_MS = [250, 1_000, 5_000] as const;
 
-export function useDkgMemoryCapabilities(channelId: string | null) {
-  const relayQuery = useQuery({
-    queryKey: ["dkg-memory", "relay-http", channelId],
+function useRelayHttpUrl({ enabled }: { enabled: boolean }) {
+  return useQuery({
+    queryKey: ["dkg-memory", "relay-http"],
     queryFn: getRelayHttpUrl,
-    enabled: Boolean(channelId),
+    enabled,
+    select: (relay) => relay.replace(/\/+$/, ""),
     staleTime: Number.POSITIVE_INFINITY,
   });
-  const relay = relayQuery.data?.replace(/\/+$/, "") ?? null;
+}
+
+async function fetchRelayCapabilities(relay: string | null) {
+  if (!relay) throw new Error("Relay URL is unavailable.");
+  return fetchDkgMemoryCapabilities(relay);
+}
+
+export function useDkgMemoryCapabilities({ enabled }: { enabled: boolean }) {
+  const relayQuery = useRelayHttpUrl({ enabled });
+  const relay = relayQuery.data ?? null;
 
   return useQuery({
     queryKey: ["dkg-memory", "capabilities", relay],
-    queryFn: () => fetchDkgMemoryCapabilities(relay as string),
-    enabled: Boolean(channelId && relay),
+    queryFn: () => fetchRelayCapabilities(relay),
+    enabled: Boolean(enabled && relay),
     retry: CAPABILITY_RETRY_DELAYS_MS.length,
     retryDelay: (attempt) =>
       CAPABILITY_RETRY_DELAYS_MS[

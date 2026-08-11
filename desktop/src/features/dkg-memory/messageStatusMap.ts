@@ -5,6 +5,7 @@ import {
   subscribeAgentObserverStore,
 } from "@/features/agents/observerRelayStore";
 import type { TimelineMessage } from "@/features/messages/types";
+import { useStableArrayShallow } from "@/shared/hooks/useStableReference";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import { useDkgMemoryCapabilities } from "./hooks";
 import {
@@ -23,7 +24,9 @@ export type AgentMessageMemoryStatus = {
 };
 
 export function useDkgMemoryExpectation(channelId: string | null): boolean {
-  return useDkgMemoryCapabilities(channelId).data?.memory ?? false;
+  const enabled = Boolean(channelId);
+  const capabilities = useDkgMemoryCapabilities({ enabled });
+  return enabled && (capabilities.data?.memory ?? false);
 }
 
 /**
@@ -69,23 +72,16 @@ export function useMessageMemoryStatusMap(
 ): ReadonlyMap<string, AgentMessageMemoryStatus> {
   const resolvedChannelId = channelId ?? null;
   const memoryExpected = useDkgMemoryExpectation(resolvedChannelId);
-  const agentPubkeysKey = React.useMemo(
-    () =>
-      [
-        ...new Set(
-          messages
-            .filter((message) => message.isAgent && message.signerPubkey)
-            .map((message) => normalizePubkey(message.signerPubkey as string)),
-        ),
-      ]
-        .sort()
-        .join("\u0000"),
-    [messages],
-  );
-  const agentPubkeys = React.useMemo(
-    () => (agentPubkeysKey ? agentPubkeysKey.split("\u0000") : []),
-    [agentPubkeysKey],
-  );
+  const derivedAgentPubkeys = React.useMemo(() => {
+    const pubkeys = new Set<string>();
+    for (const message of messages) {
+      if (message.isAgent && message.signerPubkey) {
+        pubkeys.add(normalizePubkey(message.signerPubkey));
+      }
+    }
+    return [...pubkeys].sort();
+  }, [messages]);
+  const agentPubkeys = useStableArrayShallow(derivedAgentPubkeys);
   const readEvidence = React.useMemo(
     () => createChannelMemoryEvidenceSelector(resolvedChannelId, agentPubkeys),
     [agentPubkeys, resolvedChannelId],
