@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { after, afterEach, before, test } from "node:test";
+import { after, afterEach, before, mock, test } from "node:test";
 
 import { JSDOM } from "jsdom";
 
@@ -22,6 +22,12 @@ before(() => {
       if (command === "get_relay_http_url") {
         return Promise.resolve("https://relay.example");
       }
+      if (command === "get_identity") {
+        return Promise.resolve({
+          pubkey: "e".repeat(64),
+          display_name: "Test owner",
+        });
+      }
       return Promise.resolve(null);
     },
   };
@@ -33,18 +39,31 @@ afterEach(async () => {
   cleanup();
   queryClient?.clear();
   queryClient = undefined;
+  const { resetAgentObserverStore } = await import(
+    "@/features/agents/observerRelayStore"
+  );
+  resetAgentObserverStore();
+  mock.restoreAll();
   globalThis.fetch = originalFetch;
 });
 
-test("a mounted channel retries capability discovery and reveals stored memory", async () => {
+test("a mounted channel retries capabilities, subscribes, and reveals observer memory", async () => {
   const React = await import("react");
   const { QueryClient, QueryClientProvider } = await import(
     "@tanstack/react-query"
   );
-  const { render, waitFor } = await import("@testing-library/react");
-  const { buildMessageMemoryStatusMap, useDkgMemoryExpectation } = await import(
-    "./messageStatusMap.ts"
+  const { act, render, waitFor } = await import("@testing-library/react");
+  const { useMessageMemoryStatusMap } = await import("./messageStatusMap.ts");
+  const { relayClient } = await import("@/shared/api/relayClient");
+  const { injectObserverEventsForE2E, resetAgentObserverStore } = await import(
+    "@/features/agents/observerRelayStore"
   );
+  resetAgentObserverStore();
+  let subscriptions = 0;
+  mock.method(relayClient, "subscribeLive", async () => {
+    subscriptions += 1;
+    return async () => {};
+  });
   let fetches = 0;
   globalThis.fetch = async () => {
     fetches += 1;
@@ -70,44 +89,11 @@ test("a mounted channel retries capability discovery and reveals stored memory",
     isAgent: true,
     signerPubkey: pubkey,
   };
-  const evidence = new Map([
-    [
-      pubkey,
-      {
-        completedTurnIds: new Set(),
-        transcript: [
-          {
-            id: "memory-tool",
-            type: "tool",
-            renderClass: "shell",
-            descriptor: { renderClass: "shell", label: "Shell", preview: null },
-            title: "buzz memory propose",
-            toolName: "shell",
-            buzzToolName: null,
-            status: "completed",
-            args: { command: `buzz memory propose --source ${messageId}` },
-            result: '{"state":"stored"}',
-            isError: false,
-            timestamp: "2026-08-11T08:00:00Z",
-            startedAt: "2026-08-11T08:00:00Z",
-            completedAt: "2026-08-11T08:00:01Z",
-            channelId,
-            turnId: "turn-one",
-            sessionId: "session-one",
-          },
-        ],
-      },
-    ],
-  ]);
 
   function Harness() {
-    const expected = useDkgMemoryExpectation(channelId);
-    const status = buildMessageMemoryStatusMap(
-      channelId,
-      [message],
-      expected,
-      evidence,
-    ).get(messageId)?.status;
+    const status = useMessageMemoryStatusMap(channelId, [message]).get(
+      messageId,
+    )?.status;
     return React.createElement(
       "span",
       { "data-testid": "memory" },
@@ -126,9 +112,41 @@ test("a mounted channel retries capability discovery and reveals stored memory",
     ),
   );
   assert.equal(view.getByTestId("memory").textContent, "none");
+  await waitFor(() => assert.equal(subscriptions, 1), { timeout: 2_000 });
+  await act(async () => {
+    injectObserverEventsForE2E(pubkey, [
+      {
+        seq: 1,
+        timestamp: "2026-08-11T08:00:00.000Z",
+        kind: "acp_read",
+        agentIndex: 0,
+        channelId,
+        sessionId: "session-one",
+        turnId: "turn-one",
+        payload: {
+          method: "session/update",
+          params: {
+            sessionId: "session-one",
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "memory-tool",
+              status: "completed",
+              title: "shell",
+              kind: "shell",
+              rawInput: {
+                command: `buzz memory propose --source ${messageId}`,
+              },
+              rawOutput: '{"state":"stored"}',
+            },
+          },
+        },
+      },
+    ]);
+  });
   await waitFor(
     () => assert.equal(view.getByTestId("memory").textContent, "stored"),
     { timeout: 2_000 },
   );
   assert.equal(fetches, 2);
+  assert.equal(subscriptions, 1);
 });

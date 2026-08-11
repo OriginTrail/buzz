@@ -5,12 +5,28 @@
 // navigates away. Labels are inert text; no editing, no action execution.
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import type { DecisionEntry, GraphNode } from "../api";
 import { explorerSource } from "../api";
 import { useSubgraphGraph } from "../hooks";
 import { TopologyView } from "../topology/TopologyView";
 import type { TopologyTarget } from "../topology/client";
 import { GraphCanvas, type GraphSelection } from "./GraphCanvas";
 import { NodeUiResolve } from "./NodeUiResolve";
+
+export type GraphOverlayTarget =
+  | TopologyTarget
+  | { kind: "channel-decisions"; decisions: DecisionEntry[] };
+
+function decisionsToNodes(decisions: DecisionEntry[]): GraphNode[] {
+  return decisions.map((decision) => ({
+    id: decision.uri,
+    kind: "decision",
+    label: decision.name ?? decision.uri.split("/").pop() ?? decision.uri,
+    at: decision.at
+      ? Math.floor(new Date(decision.at).getTime() / 1_000) || null
+      : null,
+  }));
+}
 
 const LAYER_META = {
   WM: { label: "Draft — only on this node", dot: "bg-slate-400" },
@@ -32,17 +48,23 @@ export function GraphOverlay({
 }: {
   channelId: string;
   cg: string | null;
-  target: TopologyTarget;
+  target: GraphOverlayTarget;
   onClose: () => void;
 }) {
-  return target.kind === "channel" ? (
-    <ChannelGraphOverlay
-      channelId={channelId}
-      cg={cg}
-      target={target}
-      onClose={onClose}
-    />
-  ) : (
+  if (target.kind === "channel") {
+    return (
+      <ChannelGraphOverlay
+        channelId={channelId}
+        cg={cg}
+        target={target}
+        onClose={onClose}
+      />
+    );
+  }
+  if (target.kind === "channel-decisions") {
+    return <DecisionsGraphOverlay cg={cg} target={target} onClose={onClose} />;
+  }
+  return (
     <SubgraphGraphOverlay
       channelId={channelId}
       cg={cg}
@@ -74,7 +96,6 @@ function GraphOverlayShell({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-
   return createPortal(
     <div
       className="fixed inset-0 z-[100] flex flex-col bg-background"
@@ -117,6 +138,58 @@ function ProviderBadge() {
   );
 }
 
+function LayerCountsLegend({
+  counts,
+}: {
+  counts: Readonly<Record<keyof typeof LAYER_META, number>>;
+}) {
+  return (
+    <div className="ml-2 flex items-center gap-2">
+      {(["WM", "SWM", "VM"] as const).map((tag) => (
+        <span
+          key={tag}
+          className="flex items-center gap-1 rounded-md border border-border bg-muted/30 px-1.5 py-0.5 text-2xs"
+          title={LAYER_META[tag].label}
+        >
+          <span className={`h-1.5 w-1.5 rounded-full ${LAYER_META[tag].dot}`} />
+          {tag}
+          <span className="tabular-nums text-muted-foreground">
+            {counts[tag]}
+          </span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function GraphModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: "spine" | "topology";
+  onChange: (mode: "spine" | "topology") => void;
+}) {
+  return (
+    <div className="ml-auto flex rounded-md border border-border text-xs">
+      <button
+        type="button"
+        onClick={() => onChange("spine")}
+        className={`rounded-l-md px-2 py-1 ${mode === "spine" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+      >
+        Traces
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("topology")}
+        data-testid="dkg-topology-toggle"
+        className={`rounded-r-md px-2 py-1 ${mode === "topology" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+      >
+        ⬡ Graph
+      </button>
+    </div>
+  );
+}
+
 function ChannelGraphOverlay({
   channelId,
   cg,
@@ -152,6 +225,50 @@ function ChannelGraphOverlay({
             neighbors: [],
           })
         }
+      />
+    </GraphOverlayShell>
+  );
+}
+
+function DecisionsGraphOverlay({
+  cg,
+  target,
+  onClose,
+}: {
+  cg: string | null;
+  target: Extract<GraphOverlayTarget, { kind: "channel-decisions" }>;
+  onClose: () => void;
+}) {
+  const nodes = useMemo(() => decisionsToNodes(target.decisions), [target]);
+  const [selection, setSelection] = useState<GraphSelection | null>(null);
+
+  return (
+    <GraphOverlayShell
+      onClose={onClose}
+      title={
+        <>
+          All decisions
+          <span className="ml-2 font-normal text-muted-foreground">
+            {nodes.length} decisions · 0 evidence
+          </span>
+        </>
+      }
+      headerControls={<LayerCountsLegend counts={{ WM: 0, SWM: 0, VM: 0 }} />}
+      aside={
+        selection ? (
+          <EvidenceRail selection={selection} cg={cg} />
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Select a decision to inspect its available provenance here.
+          </p>
+        )
+      }
+    >
+      <GraphCanvas
+        nodes={nodes}
+        edges={[]}
+        selectedId={selection?.node.id ?? null}
+        onSelect={setSelection}
       />
     </GraphOverlayShell>
   );
@@ -207,40 +324,8 @@ function SubgraphGraphOverlay({
 
   const controls = (
     <>
-      <div className="ml-2 flex items-center gap-2">
-        {(["WM", "SWM", "VM"] as const).map((tag) => (
-          <span
-            key={tag}
-            className="flex items-center gap-1 rounded-md border border-border bg-muted/30 px-1.5 py-0.5 text-2xs"
-            title={LAYER_META[tag].label}
-          >
-            <span
-              className={`h-1.5 w-1.5 rounded-full ${LAYER_META[tag].dot}`}
-            />
-            {tag}
-            <span className="tabular-nums text-muted-foreground">
-              {layerCounts[tag]}
-            </span>
-          </span>
-        ))}
-      </div>
-      <div className="ml-auto flex rounded-md border border-border text-xs">
-        <button
-          type="button"
-          onClick={() => setMode("spine")}
-          className={`rounded-l-md px-2 py-1 ${mode === "spine" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
-        >
-          Traces
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode("topology")}
-          data-testid="dkg-topology-toggle"
-          className={`rounded-r-md px-2 py-1 ${mode === "topology" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
-        >
-          ⬡ Graph
-        </button>
-      </div>
+      <LayerCountsLegend counts={layerCounts} />
+      <GraphModeToggle mode={mode} onChange={setMode} />
     </>
   );
 

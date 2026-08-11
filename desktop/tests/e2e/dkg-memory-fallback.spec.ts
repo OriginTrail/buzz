@@ -199,9 +199,35 @@ test("named subgraph lens queries the provider and keeps Graph available", async
   await expect(
     overlay.getByText(/2 connected entities · 1 relationships/i),
   ).toBeVisible({ timeout: 15_000 });
-  await expect(overlay.locator("canvas").first()).toBeVisible({
+  const topologyCanvas = overlay.locator("canvas").first();
+  await expect(topologyCanvas).toBeVisible({
     timeout: 20_000,
   });
+  await expect
+    .poll(
+      () =>
+        topologyCanvas.evaluate((node) => {
+          const canvas = node as HTMLCanvasElement;
+          const context = canvas.getContext("2d", {
+            willReadFrequently: true,
+          });
+          if (!context || canvas.width === 0 || canvas.height === 0) return 0;
+          const pixels = context.getImageData(
+            0,
+            0,
+            canvas.width,
+            canvas.height,
+          ).data;
+          let painted = 0;
+          for (let index = 3; index < pixels.length; index += 4) {
+            if (pixels[index] > 0) painted += 1;
+            if (painted >= 10) break;
+          }
+          return painted;
+        }),
+      { timeout: 20_000 },
+    )
+    .toBeGreaterThanOrEqual(10);
   expect(tripleRequests).toHaveLength(1);
   expect(new URL(tripleRequests[0]).searchParams.get("name")).toBe(
     "engineering",
