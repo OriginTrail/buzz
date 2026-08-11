@@ -3,7 +3,7 @@
 // reusable canvas the Knowledge section mounts later). Read-only: node click
 // selects and focuses the evidence rail; the graph orients, it never
 // navigates away. Labels are inert text; no editing, no action execution.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { explorerSource } from "../api";
 import { useSubgraphGraph } from "../hooks";
@@ -35,35 +35,45 @@ export function GraphOverlay({
   target: TopologyTarget;
   onClose: () => void;
 }) {
-  const channelWide = target.kind === "channel";
-  const subgraph = target.kind === "subgraph" ? target.name : null;
-  const graph = useSubgraphGraph(channelId, cg, subgraph);
-  const [selection, setSelection] = useState<GraphSelection | null>(null);
-  // Spine is the first paint; topology (hexagonal RdfGraph) mounts only on
-  // this explicit scoped action — per the repurpose wrap's acceptance gate.
-  const [mode, setMode] = useState<"spine" | "topology">(
-    channelWide ? "topology" : "spine",
+  return target.kind === "channel" ? (
+    <ChannelGraphOverlay
+      channelId={channelId}
+      cg={cg}
+      target={target}
+      onClose={onClose}
+    />
+  ) : (
+    <SubgraphGraphOverlay
+      channelId={channelId}
+      cg={cg}
+      target={target}
+      onClose={onClose}
+    />
   );
+}
 
+type OverlayShellProps = {
+  aside: ReactNode;
+  children: ReactNode;
+  headerControls?: ReactNode;
+  onClose: () => void;
+  title: ReactNode;
+};
+
+function GraphOverlayShell({
+  aside,
+  children,
+  headerControls,
+  onClose,
+  title,
+}: OverlayShellProps) {
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-
-  const data = graph.data;
-  const nodes = useMemo(() => data?.nodes ?? [], [data]);
-  const edges = useMemo(() => data?.edges ?? [], [data]);
-
-  const decisionCount = nodes.filter((n) => n.kind === "decision").length;
-  const evidenceCount = nodes.length - decisionCount;
-  const layerCounts = useMemo(() => {
-    const c = { WM: 0, SWM: 0, VM: 0 };
-    for (const n of nodes) if (n.layer) c[n.layer] += 1;
-    return c;
-  }, [nodes]);
 
   return createPortal(
     <div
@@ -71,62 +81,10 @@ export function GraphOverlay({
       data-testid="dkg-graph-overlay"
     >
       <header className="flex items-center gap-3 border-b border-border py-2 pl-20 pr-4">
-        <h2 className="text-sm font-semibold">
-          {channelWide ? "Channel knowledge graph" : subgraph}
-          {!channelWide && (
-            <span className="ml-2 font-normal text-muted-foreground">
-              {decisionCount} decisions · {evidenceCount} evidence
-            </span>
-          )}
-        </h2>
-        {explorerSource() === "gateway" ? (
-          <span className="rounded-md border border-sky-600/40 bg-sky-600/10 px-2 py-0.5 text-xs">
-            resolved through the community DKG provider
-          </span>
-        ) : (
-          <span className="rounded-md border border-green-600/40 bg-green-600/10 px-2 py-0.5 text-xs">
-            provenance checked by your node
-          </span>
-        )}
-        {!channelWide && (
-          <div className="ml-2 flex items-center gap-2">
-            {(["WM", "SWM", "VM"] as const).map((tag) => (
-              <span
-                key={tag}
-                className="flex items-center gap-1 rounded-md border border-border bg-muted/30 px-1.5 py-0.5 text-2xs"
-                title={LAYER_META[tag].label}
-              >
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${LAYER_META[tag].dot}`}
-                />
-                {tag}
-                <span className="tabular-nums text-muted-foreground">
-                  {layerCounts[tag]}
-                </span>
-              </span>
-            ))}
-          </div>
-        )}
+        <h2 className="text-sm font-semibold">{title}</h2>
+        <ProviderBadge />
+        {headerControls}
         <div className="flex-1" />
-        {!channelWide && (
-          <div className="mr-2 flex rounded-md border border-border text-xs">
-            <button
-              type="button"
-              onClick={() => setMode("spine")}
-              className={`rounded-l-md px-2 py-1 ${mode === "spine" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
-            >
-              Traces
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode("topology")}
-              data-testid="dkg-topology-toggle"
-              className={`rounded-r-md px-2 py-1 ${mode === "topology" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
-            >
-              ⬡ Graph
-            </button>
-          </div>
-        )}
         <button
           type="button"
           onClick={onClose}
@@ -136,93 +94,226 @@ export function GraphOverlay({
           ✕ close
         </button>
       </header>
-
       <div className="flex min-h-0 flex-1">
-        <main className="min-w-0 flex-1">
-          {!channelWide && graph.isLoading && (
-            <div className="p-6 text-sm text-muted-foreground">
-              Reading subgraph through the DKG provider…
-            </div>
-          )}
-          {!channelWide && graph.isError && (
-            <div className="p-6 text-sm text-muted-foreground">
-              Could not read this subgraph through the available DKG provider.
-            </div>
-          )}
-          {!channelWide && data && data.gate !== "ok" && (
-            <div className="p-6 text-sm text-muted-foreground">
-              This graph is unavailable through both the local node and the
-              community DKG provider.
-            </div>
-          )}
-          {data && data.gate === "ok" && mode === "spine" && (
-            <GraphCanvas
-              nodes={nodes}
-              edges={edges}
-              selectedId={selection?.node.id ?? null}
-              onSelect={setSelection}
-            />
-          )}
-          {mode === "topology" && (
-            <TopologyView
-              channelId={channelId}
-              cg={cg}
-              target={target}
-              onSelectUri={(uri, label) => {
-                const known = nodes.find((n) => n.id === uri);
-                if (known) {
-                  const neighbors: {
-                    rel: string;
-                    node: (typeof nodes)[number];
-                  }[] = [];
-                  const seen = new Set<string>();
-                  for (const e of edges) {
-                    if (e.from !== uri && e.to !== uri) continue;
-                    const other = nodes.find(
-                      (n) => n.id === (e.from === uri ? e.to : e.from),
-                    );
-                    if (!other || seen.has(`${e.rel}|${other.id}`)) continue;
-                    seen.add(`${e.rel}|${other.id}`);
-                    neighbors.push({ rel: e.rel, node: other });
-                  }
-                  setSelection({ node: known, neighbors });
-                } else {
-                  setSelection({
-                    node: {
-                      id: uri,
-                      kind: "claim",
-                      label: label ?? uri,
-                      at: null,
-                    },
-                    neighbors: [],
-                  });
-                }
-              }}
-            />
-          )}
-        </main>
-
+        <main className="min-w-0 flex-1">{children}</main>
         <aside className="w-80 shrink-0 overflow-y-auto border-l border-border p-3">
-          {selection ? (
-            <EvidenceRail selection={selection} cg={cg} />
-          ) : mode === "spine" ? (
-            <p className="text-xs text-muted-foreground">
-              Select a decision or evidence row to inspect its trail here. Cards
-              are decisions in time order; ⊕ rows support a decision, ⊖ rows
-              contest it. The strip up top is the whole deliberation — amber
-              ticks are contested; click to jump.
-            </p>
-          ) : (
-            <p className="text-xs text-muted-foreground">
-              The knowledge graph as your DKG node renders it — hexagons are
-              entities, sized by connections; zoom in for labels. Click a node
-              to inspect it, or select one to open its evidence trail here.
-            </p>
-          )}
+          {aside}
         </aside>
       </div>
     </div>,
     document.body,
+  );
+}
+
+function ProviderBadge() {
+  return explorerSource() === "gateway" ? (
+    <span className="rounded-md border border-sky-600/40 bg-sky-600/10 px-2 py-0.5 text-xs">
+      resolved through the community DKG provider
+    </span>
+  ) : (
+    <span className="rounded-md border border-green-600/40 bg-green-600/10 px-2 py-0.5 text-xs">
+      provenance checked by your node
+    </span>
+  );
+}
+
+function ChannelGraphOverlay({
+  channelId,
+  cg,
+  target,
+  onClose,
+}: {
+  channelId: string;
+  cg: string | null;
+  target: Extract<TopologyTarget, { kind: "channel" }>;
+  onClose: () => void;
+}) {
+  const [selection, setSelection] = useState<GraphSelection | null>(null);
+
+  return (
+    <GraphOverlayShell
+      onClose={onClose}
+      title="Channel knowledge graph"
+      aside={
+        selection ? (
+          <EvidenceRail selection={selection} cg={cg} />
+        ) : (
+          <TopologyHelp />
+        )
+      }
+    >
+      <TopologyView
+        channelId={channelId}
+        cg={cg}
+        target={target}
+        onSelectUri={(uri, label) =>
+          setSelection({
+            node: { id: uri, kind: "claim", label: label ?? uri, at: null },
+            neighbors: [],
+          })
+        }
+      />
+    </GraphOverlayShell>
+  );
+}
+
+function SubgraphGraphOverlay({
+  channelId,
+  cg,
+  target,
+  onClose,
+}: {
+  channelId: string;
+  cg: string | null;
+  target: Extract<TopologyTarget, { kind: "subgraph" }>;
+  onClose: () => void;
+}) {
+  const graph = useSubgraphGraph(channelId, cg, target.name);
+  const [selection, setSelection] = useState<GraphSelection | null>(null);
+  const [mode, setMode] = useState<"spine" | "topology">("spine");
+  const data = graph.data;
+  const nodes = useMemo(() => data?.nodes ?? [], [data]);
+  const edges = useMemo(() => data?.edges ?? [], [data]);
+  const decisionCount = nodes.filter((node) => node.kind === "decision").length;
+  const evidenceCount = nodes.length - decisionCount;
+  const layerCounts = useMemo(() => {
+    const counts = { WM: 0, SWM: 0, VM: 0 };
+    for (const node of nodes) if (node.layer) counts[node.layer] += 1;
+    return counts;
+  }, [nodes]);
+
+  const selectTopologyUri = (uri: string, label?: string) => {
+    const known = nodes.find((node) => node.id === uri);
+    if (!known) {
+      setSelection({
+        node: { id: uri, kind: "claim", label: label ?? uri, at: null },
+        neighbors: [],
+      });
+      return;
+    }
+    const neighbors: GraphSelection["neighbors"] = [];
+    const seen = new Set<string>();
+    for (const edge of edges) {
+      if (edge.from !== uri && edge.to !== uri) continue;
+      const other = nodes.find(
+        (node) => node.id === (edge.from === uri ? edge.to : edge.from),
+      );
+      if (!other || seen.has(`${edge.rel}|${other.id}`)) continue;
+      seen.add(`${edge.rel}|${other.id}`);
+      neighbors.push({ rel: edge.rel, node: other });
+    }
+    setSelection({ node: known, neighbors });
+  };
+
+  const controls = (
+    <>
+      <div className="ml-2 flex items-center gap-2">
+        {(["WM", "SWM", "VM"] as const).map((tag) => (
+          <span
+            key={tag}
+            className="flex items-center gap-1 rounded-md border border-border bg-muted/30 px-1.5 py-0.5 text-2xs"
+            title={LAYER_META[tag].label}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${LAYER_META[tag].dot}`}
+            />
+            {tag}
+            <span className="tabular-nums text-muted-foreground">
+              {layerCounts[tag]}
+            </span>
+          </span>
+        ))}
+      </div>
+      <div className="ml-auto flex rounded-md border border-border text-xs">
+        <button
+          type="button"
+          onClick={() => setMode("spine")}
+          className={`rounded-l-md px-2 py-1 ${mode === "spine" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+        >
+          Traces
+        </button>
+        <button
+          type="button"
+          onClick={() => setMode("topology")}
+          data-testid="dkg-topology-toggle"
+          className={`rounded-r-md px-2 py-1 ${mode === "topology" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+        >
+          ⬡ Graph
+        </button>
+      </div>
+    </>
+  );
+
+  return (
+    <GraphOverlayShell
+      onClose={onClose}
+      title={
+        <>
+          {target.name}
+          <span className="ml-2 font-normal text-muted-foreground">
+            {decisionCount} decisions · {evidenceCount} evidence
+          </span>
+        </>
+      }
+      headerControls={controls}
+      aside={
+        selection ? (
+          <EvidenceRail selection={selection} cg={cg} />
+        ) : mode === "spine" ? (
+          <p className="text-xs text-muted-foreground">
+            Select a decision or evidence row to inspect its trail here. Cards
+            are decisions in time order; ⊕ rows support a decision, ⊖ rows
+            contest it. The strip up top is the whole deliberation — amber ticks
+            are contested; click to jump.
+          </p>
+        ) : (
+          <TopologyHelp />
+        )
+      }
+    >
+      {graph.isLoading ? (
+        <div className="p-6 text-sm text-muted-foreground">
+          Reading subgraph through the DKG provider…
+        </div>
+      ) : null}
+      {graph.isError ? (
+        <div className="p-6 text-sm text-muted-foreground">
+          Could not read this subgraph through the available DKG provider.
+        </div>
+      ) : null}
+      {data && data.gate !== "ok" ? (
+        <div className="p-6 text-sm text-muted-foreground">
+          This graph is unavailable through both the local node and the
+          community DKG provider.
+        </div>
+      ) : null}
+      {data?.gate === "ok" && mode === "spine" ? (
+        <GraphCanvas
+          nodes={nodes}
+          edges={edges}
+          selectedId={selection?.node.id ?? null}
+          onSelect={setSelection}
+        />
+      ) : null}
+      {mode === "topology" ? (
+        <TopologyView
+          channelId={channelId}
+          cg={cg}
+          target={target}
+          onSelectUri={selectTopologyUri}
+        />
+      ) : null}
+    </GraphOverlayShell>
+  );
+}
+
+function TopologyHelp() {
+  return (
+    <p className="text-xs text-muted-foreground">
+      The knowledge graph as your DKG node renders it — hexagons are entities,
+      sized by connections; zoom in for labels. Click a node to inspect it, or
+      select one to open its evidence trail here.
+    </p>
   );
 }
 

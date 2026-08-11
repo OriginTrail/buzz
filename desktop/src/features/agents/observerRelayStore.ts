@@ -45,6 +45,7 @@ const EMPTY_EVENTS: ObserverEvent[] = [];
 const EMPTY_TRANSCRIPT: TranscriptItem[] = [];
 
 const listeners = new Set<() => void>();
+let observerStoreRevision = 0;
 const eventsByAgent = new Map<string, ObserverEvent[]>();
 const transcriptByAgent = new Map<string, TranscriptState>();
 const snapshotByAgent = new Map<string, ObserverSnapshot>();
@@ -170,6 +171,7 @@ let eventProcessingQueue: Promise<void> = Promise.resolve();
 let generation = 0;
 
 function notifyListeners() {
+  observerStoreRevision += 1;
   for (const listener of listeners) {
     listener();
   }
@@ -514,6 +516,16 @@ export function subscribeAgentObserverStore(listener: () => void) {
   return () => {
     listeners.delete(listener);
   };
+}
+
+/**
+ * Monotonic snapshot for channel-level consumers that aggregate more than one
+ * agent. Individual agent hooks retain their memoized snapshots; aggregate
+ * consumers subscribe once and read the relevant per-agent records after the
+ * revision advances.
+ */
+export function getAgentObserverStoreRevision(): number {
+  return observerStoreRevision;
 }
 
 function isControlResultFrame(payload: unknown): payload is ControlResultFrame {

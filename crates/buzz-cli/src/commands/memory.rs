@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::future::Future;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use nostr::{EventBuilder, Kind, Tag};
@@ -386,9 +387,25 @@ enum ProposalProgress {
     Unknown,
 }
 
-/// Normalize the integration's internal lifecycle phases into the two states
-/// an agent can act on. Older beta relays exposed `distilled`/`wm_written`/
-/// `finalized`/`shared`; none of those means the graph is queryable yet.
+#[derive(serde::Deserialize)]
+struct ProposalStateContract {
+    stored: Vec<String>,
+    processing: Vec<String>,
+}
+
+fn proposal_state_contract() -> &'static ProposalStateContract {
+    static CONTRACT: OnceLock<ProposalStateContract> = OnceLock::new();
+    CONTRACT.get_or_init(|| {
+        serde_json::from_str(include_str!(
+            "../../../../desktop/src/features/dkg-memory/proposalStates.json"
+        ))
+        .expect("checked-in DKG memory lifecycle contract must be valid JSON")
+    })
+}
+
+/// Normalize beta relay phases through the same checked-in compatibility
+/// contract used by the desktop. The public `state` is actionable; a raw beta
+/// phase is retained separately as `internalState` for diagnostics.
 fn normalize_proposal_response(response: &str) -> Result<(String, ProposalProgress), CliError> {
     let mut value: serde_json::Value = serde_json::from_str(response).map_err(|error| {
         CliError::Other(format!("memory proposal returned invalid JSON: {error}"))
@@ -396,15 +413,22 @@ fn normalize_proposal_response(response: &str) -> Result<(String, ProposalProgre
     let state = value
         .get("state")
         .and_then(serde_json::Value::as_str)
-        .unwrap_or("");
-    let (external, progress) = match state {
-        "stored" | "receipted" => (Some("stored"), ProposalProgress::Stored),
-        "processing" | "distilled" | "wm_written" | "finalized" | "shared" => {
-            (Some("processing"), ProposalProgress::Processing)
-        }
-        _ => (None, ProposalProgress::Unknown),
+        .unwrap_or("")
+        .to_string();
+    let contract = proposal_state_contract();
+    let (external, progress) = if contract.stored.iter().any(|entry| entry == &state) {
+        (Some("stored"), ProposalProgress::Stored)
+    } else if contract.processing.iter().any(|entry| entry == &state) {
+        (Some("processing"), ProposalProgress::Processing)
+    } else {
+        (None, ProposalProgress::Unknown)
     };
     if let (Some(external), Some(object)) = (external, value.as_object_mut()) {
+        if state != external {
+            object
+                .entry("internalState".to_string())
+                .or_insert_with(|| serde_json::Value::String(state.clone()));
+        }
         object.insert(
             "state".to_string(),
             serde_json::Value::String(external.to_string()),

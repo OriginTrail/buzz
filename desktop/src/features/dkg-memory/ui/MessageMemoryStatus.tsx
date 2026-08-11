@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import {
   BrainCircuit,
   Check,
@@ -6,52 +6,25 @@ import {
   RefreshCw,
   TriangleAlert,
 } from "lucide-react";
-import {
-  useAgentTranscript,
-  useObserverEvents,
-} from "@/features/agents/ui/useObserverEvents";
 import { relayClient } from "@/shared/api/relayClient";
 import { Button } from "@/shared/ui/button";
-import { memoryStatusForMessage } from "../messageStatus";
+import type { MessageMemoryStatus as MemoryStatus } from "../messageStatus";
 
 export function MessageMemoryStatus({
   agentName,
   agentPubkey,
   channelId,
   messageId,
+  status,
 }: {
   agentName: string;
   agentPubkey: string;
   channelId: string;
   messageId: string;
+  status: MemoryStatus;
 }) {
-  const transcript = useAgentTranscript(true, agentPubkey);
-  const observer = useObserverEvents(true, agentPubkey);
-  const completedTurnIds = useMemo(
-    () =>
-      new Set(
-        observer.events
-          .filter(
-            (event) =>
-              event.channelId === channelId &&
-              event.turnId &&
-              ["turn_completed", "turn_error", "agent_panic"].includes(
-                event.kind,
-              ),
-          )
-          .map((event) => event.turnId as string),
-      ),
-    [channelId, observer.events],
-  );
-  const status = memoryStatusForMessage(
-    transcript,
-    channelId,
-    messageId,
-    completedTurnIds,
-  );
   const [retrying, setRetrying] = useState(false);
   const [retryRequested, setRetryRequested] = useState(false);
-  if (!status) return null;
 
   async function retry() {
     setRetrying(true);

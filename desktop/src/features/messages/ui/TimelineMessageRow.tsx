@@ -5,6 +5,7 @@ import { THREAD_REPLY_ROW_MARGIN_INLINE_REM } from "@/features/messages/lib/thre
 import type { buildVideoReviewContextForMessage } from "@/features/messages/lib/videoReviewContext";
 import { canManageMessageForCurrentUser } from "@/features/messages/lib/canManageMessage";
 import type { TimelineMessage } from "@/features/messages/types";
+import type { AgentMessageMemoryStatus } from "@/features/dkg-memory/messageStatusMap";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import { cn } from "@/shared/lib/cn";
 import { MessageRow } from "./MessageRow";
@@ -73,6 +74,7 @@ type MessageRowItemProps = {
   isFollowedByContinuation?: boolean;
   isFollowingThreadById?: (rootId: string) => boolean;
   isUnread?: boolean;
+  memoryStatus?: AgentMessageMemoryStatus | null;
   playEntrance?: boolean;
   onEntranceComplete?: (messageId: string) => void;
   onDelete?: (message: TimelineMessage) => void;
@@ -105,6 +107,7 @@ export function MessageRowItem({
   isFollowedByContinuation = false,
   isFollowingThreadById,
   isUnread,
+  memoryStatus,
   playEntrance = false,
   onEntranceComplete,
   onDelete,
@@ -158,6 +161,7 @@ export function MessageRowItem({
           playEntrance={playEntrance}
           onEntranceComplete={onEntranceComplete}
           message={message}
+          memoryStatus={memoryStatus}
           onDelete={canDelete}
           onEdit={canEdit}
           onFollowThread={
@@ -211,6 +215,7 @@ export function MessageRowItem({
         playEntrance={playEntrance}
         onEntranceComplete={onEntranceComplete}
         message={message}
+        memoryStatus={memoryStatus}
         onDelete={canDelete}
         onEdit={canEdit}
         onMarkRead={onMarkRead}

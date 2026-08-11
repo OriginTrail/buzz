@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { memoryStatusForMessage } from "./messageStatus.ts";
+import {
+  advertisesDkgMemory,
+  buildMessageMemoryStatusMap,
+} from "./messageStatusMap.ts";
 
 const CHANNEL = "channel-one";
 const MESSAGE = "a".repeat(64);
@@ -155,4 +159,75 @@ test("display text and unrelated result IDs cannot impersonate structured teleme
     ),
     "stored",
   );
+});
+
+test("a non-DKG relay never marks ordinary agent messages as memory failures", () => {
+  const message = {
+    id: MESSAGE,
+    author: "Fizz",
+    isAgent: true,
+    signerPubkey: "f".repeat(64),
+  };
+  const statuses = buildMessageMemoryStatusMap(CHANNEL, [message], false, {
+    transcriptForAgent: () => [
+      tool({
+        title: "buzz messages send",
+        args: { command: "buzz messages send --channel channel-one" },
+        result: `{"event_id":"${MESSAGE}"}`,
+      }),
+    ],
+    observerEventsForAgent: () => [
+      {
+        channelId: CHANNEL,
+        turnId: "turn-one",
+        kind: "turn_completed",
+      },
+    ],
+  });
+  assert.equal(statuses.size, 0);
+});
+
+test("the channel-level map derives each agent status from one shared pass", () => {
+  const pubkey = "f".repeat(64);
+  let transcriptReads = 0;
+  const statuses = buildMessageMemoryStatusMap(
+    CHANNEL,
+    [
+      {
+        id: MESSAGE,
+        author: "Fizz",
+        isAgent: true,
+        signerPubkey: pubkey,
+      },
+      {
+        id: "b".repeat(64),
+        author: "Fizz",
+        isAgent: true,
+        signerPubkey: pubkey,
+      },
+    ],
+    true,
+    {
+      transcriptForAgent: () => {
+        transcriptReads += 1;
+        return [tool()];
+      },
+      observerEventsForAgent: () => [],
+    },
+  );
+  assert.deepEqual(statuses.get(MESSAGE), {
+    agentName: "Fizz",
+    agentPubkey: pubkey,
+    status: "stored",
+  });
+  assert.equal(transcriptReads, 1);
+});
+
+test("relay discovery explicitly gates DKG memory expectations", () => {
+  assert.equal(
+    advertisesDkgMemory({ supported_extensions: ["buzz-dkg-memory-v2"] }),
+    true,
+  );
+  assert.equal(advertisesDkgMemory({ supported_extensions: [] }), false);
+  assert.equal(advertisesDkgMemory({}), false);
 });

@@ -339,6 +339,7 @@ interface MemoryProvisioningResponse {
   contextGraphId?: string;
   operationId?: string | number;
   state?: string;
+  internalState?: string;
   error?: unknown;
 }
 
@@ -350,11 +351,15 @@ async function postMemoryProposal(
       path: "/api/dkg/memory",
       body,
     });
+  const publicState =
+    normalizedMemoryProposalState(result.state) ??
+    (status === 202 ? "processing" : status === 200 ? "stored" : undefined);
   return {
     ...result,
-    state:
-      normalizedMemoryProposalState(result.state) ??
-      (status === 202 ? "processing" : status === 200 ? "stored" : undefined),
+    internalState:
+      result.internalState ??
+      (publicState && result.state !== publicState ? result.state : undefined),
+    state: publicState,
   };
 }
 
