@@ -22,7 +22,6 @@ import type { MainTimelineEntry } from "@/features/messages/lib/threadPanel";
 import type { ChannelWindowThreadSummary } from "@/features/messages/lib/channelWindowStore";
 import { buildVideoReviewContextsByMessageId } from "@/features/messages/lib/videoReviewContext";
 import type { TimelineMessage } from "@/features/messages/types";
-import { useMessageMemoryStatusMap } from "@/features/dkg-memory/messageStatusMap";
 import type { UserProfileLookup } from "@/features/profile/lib/identity";
 import type { ChannelType } from "@/shared/api/types";
 import { cn } from "@/shared/lib/cn";
@@ -60,6 +59,7 @@ type TimelineMessageListProps = {
   isMessageUnreadById?: (messageId: string) => boolean;
   entranceMessageId?: string | null;
   onEntranceMessageComplete?: (messageId: string) => void;
+  messageBodyAdornments?: ReadonlyMap<string, React.ReactNode>;
   messageFooters?: Record<string, React.ReactNode>;
   /** Hoisted main-timeline entries (computed once in ChannelPane). Falls back
    *  to deriving them here when omitted (e.g. the deferred-render pass). */
@@ -137,6 +137,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   isMessageUnreadById,
   entranceMessageId = null,
   onEntranceMessageComplete,
+  messageBodyAdornments,
   messageFooters,
   mainEntries,
   threadSummaries,
@@ -175,7 +176,6 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       buildMainTimelineEntries(messages, undefined, threadSummaries, profiles),
     [mainEntries, messages, profiles, threadSummaries],
   );
-  const memoryStatuses = useMessageMemoryStatusMap(channelId, messages);
   // Contexts are memoized per message id so MessageRow/Markdown memo
   // comparisons hold across unrelated timeline re-renders (typing
   // indicators, presence updates) — a fresh context object per render would
@@ -264,7 +264,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
               }
               isFollowingThreadById={isFollowingThreadById}
               isUnread={isMessageUnreadById?.(item.entry.message.id)}
-              memoryStatus={memoryStatuses.get(item.entry.message.id)}
+              bodyAdornment={messageBodyAdornments?.get(item.entry.message.id)}
               playEntrance={item.entry.message.id === entranceMessageId}
               onEntranceComplete={onEntranceMessageComplete}
               onDelete={onDelete}
@@ -300,8 +300,8 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       isMessageUnreadById,
       entranceMessageId,
       onEntranceMessageComplete,
+      messageBodyAdornments,
       messageFooters,
-      memoryStatuses,
       onDelete,
       onEdit,
       onMarkRead,

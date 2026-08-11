@@ -15,7 +15,11 @@ async function advertiseDkgMemory(page: import("@playwright/test").Page) {
       headers: { "Access-Control-Allow-Origin": "*" },
       body: JSON.stringify({
         supported_extensions: ["buzz-dkg-memory-v2"],
-        dkg_memory: { query_operations: ["channel_memory", "semantic_query"] },
+        dkg_memory: {
+          profiles: ["dkg-memory@1"],
+          query_operations: ["channel_memory", "semantic_query"],
+          schema_versions: [2],
+        },
       }),
     });
   });
@@ -32,7 +36,11 @@ test("channel memory exposes graph and authenticated search without named subgra
       contentType: "application/nostr+json",
       body: JSON.stringify({
         supported_extensions: ["buzz-dkg-memory-v2"],
-        dkg_memory: { query_operations: ["channel_memory", "semantic_query"] },
+        dkg_memory: {
+          profiles: ["dkg-memory@1"],
+          query_operations: ["channel_memory", "semantic_query"],
+          schema_versions: [2],
+        },
       }),
     });
   });
@@ -323,7 +331,9 @@ test("failed provisioning leaves a request, never a false enabled claim", async 
   await expect(page.getByText(/DKG memory was enabled/i)).toHaveCount(0);
 });
 
-test("an agent response shows when its memory is stored", async ({ page }) => {
+test("an agent response shows stored memory in the timeline and thread panel", async ({
+  page,
+}) => {
   await advertiseDkgMemory(page);
   await installMockBridge(page, {
     managedAgents: [
@@ -384,9 +394,37 @@ test("an agent response shows when its memory is stored", async ({ page }) => {
   );
 
   const fizzMessage = page
+    .getByTestId("message-timeline")
     .getByTestId("message-row")
     .filter({ hasText: "Fizz reporting in." });
   await expect(fizzMessage.getByTestId("dkg-message-stored")).toHaveText(
+    "Stored in channel memory",
+  );
+
+  await page.waitForFunction(
+    () =>
+      window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({
+        channelName: "agents",
+      }) === true,
+  );
+  await page.evaluate((parentEventId) => {
+    const emit = window.__BUZZ_E2E_EMIT_MOCK_MESSAGE__;
+    if (!emit) throw new Error("Mock message emitter is unavailable");
+    emit({
+      channelName: "agents",
+      content: "Reply that opens the memory-status thread.",
+      parentEventId,
+    });
+  }, AGENT_MESSAGE_ID);
+  const threadSummary = page.locator(
+    `[data-testid="message-thread-summary"][data-thread-head-id="${AGENT_MESSAGE_ID}"]`,
+  );
+  await expect(threadSummary).toBeVisible();
+  await threadSummary.click();
+  const threadHead = page
+    .getByTestId("message-thread-panel")
+    .getByTestId("message-thread-head");
+  await expect(threadHead.getByTestId("dkg-message-stored")).toHaveText(
     "Stored in channel memory",
   );
   await waitForAnimations(page);

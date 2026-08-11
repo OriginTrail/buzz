@@ -3,8 +3,11 @@ import test from "node:test";
 import { memoryStatusForMessage } from "./messageStatus.ts";
 import {
   advertisesDkgMemory,
-  buildMessageMemoryStatusMap,
-} from "./messageStatusMap.ts";
+  advertisesDkgSemanticQuery,
+  readDkgMemoryCapabilities,
+  resetDkgMemoryCapabilityCache,
+} from "./capabilities.ts";
+import { buildMessageMemoryStatusMap } from "./messageStatusMap.ts";
 
 const CHANNEL = "channel-one";
 const MESSAGE = "a".repeat(64);
@@ -168,28 +171,18 @@ test("a non-DKG relay never marks ordinary agent messages as memory failures", (
     isAgent: true,
     signerPubkey: "f".repeat(64),
   };
-  const statuses = buildMessageMemoryStatusMap(CHANNEL, [message], false, {
-    transcriptForAgent: () => [
-      tool({
-        title: "buzz messages send",
-        args: { command: "buzz messages send --channel channel-one" },
-        result: `{"event_id":"${MESSAGE}"}`,
-      }),
-    ],
-    observerEventsForAgent: () => [
-      {
-        channelId: CHANNEL,
-        turnId: "turn-one",
-        kind: "turn_completed",
-      },
-    ],
-  });
+  const statuses = buildMessageMemoryStatusMap(
+    CHANNEL,
+    [message],
+    false,
+    new Map(),
+  );
   assert.equal(statuses.size, 0);
 });
 
 test("the channel-level map derives each agent status from one shared pass", () => {
   const pubkey = "f".repeat(64);
-  let transcriptReads = 0;
+  const transcript = [tool()];
   const statuses = buildMessageMemoryStatusMap(
     CHANNEL,
     [
@@ -207,27 +200,75 @@ test("the channel-level map derives each agent status from one shared pass", () 
       },
     ],
     true,
-    {
-      transcriptForAgent: () => {
-        transcriptReads += 1;
-        return [tool()];
-      },
-      observerEventsForAgent: () => [],
-    },
+    new Map([[pubkey, { transcript, completedTurnIds: new Set() }]]),
   );
   assert.deepEqual(statuses.get(MESSAGE), {
     agentName: "Fizz",
     agentPubkey: pubkey,
     status: "stored",
   });
-  assert.equal(transcriptReads, 1);
+  assert.strictEqual(transcript.length, 1);
 });
 
-test("relay discovery explicitly gates DKG memory expectations", () => {
+test("relay discovery mirrors the ACP memory capability contract", () => {
   assert.equal(
     advertisesDkgMemory({ supported_extensions: ["buzz-dkg-memory-v2"] }),
+    false,
+  );
+  assert.equal(
+    advertisesDkgMemory({
+      supported_extensions: ["buzz-dkg-memory-v2"],
+      dkg_memory: {
+        schema_versions: [2],
+        profiles: ["dkg-memory@1"],
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    advertisesDkgSemanticQuery({
+      supported_extensions: ["buzz-dkg-memory-v2"],
+      dkg_memory: {
+        schema_versions: [2],
+        profiles: ["dkg-memory@1"],
+        query_operations: ["semantic_query"],
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    advertisesDkgMemory({
+      supported_extensions: ["buzz-dkg-memory-v1"],
+    }),
     true,
   );
   assert.equal(advertisesDkgMemory({ supported_extensions: [] }), false);
   assert.equal(advertisesDkgMemory({}), false);
+});
+
+test("relay discovery retries after a transient failure", async () => {
+  resetDkgMemoryCapabilityCache();
+  let reads = 0;
+  const readDocument = async () => {
+    reads += 1;
+    if (reads === 1) throw new Error("relay not ready");
+    return {
+      supported_extensions: ["buzz-dkg-memory-v2"],
+      dkg_memory: {
+        schema_versions: [2],
+        profiles: ["dkg-memory@1"],
+      },
+    };
+  };
+
+  await assert.rejects(
+    readDkgMemoryCapabilities("https://relay.example", readDocument),
+    /relay not ready/,
+  );
+  assert.deepEqual(
+    await readDkgMemoryCapabilities("https://relay.example", readDocument),
+    { memory: true, semanticQuery: false },
+  );
+  assert.equal(reads, 2);
+  resetDkgMemoryCapabilityCache();
 });

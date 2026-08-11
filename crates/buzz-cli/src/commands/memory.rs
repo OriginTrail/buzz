@@ -397,7 +397,7 @@ fn proposal_state_contract() -> &'static ProposalStateContract {
     static CONTRACT: OnceLock<ProposalStateContract> = OnceLock::new();
     CONTRACT.get_or_init(|| {
         serde_json::from_str(include_str!(
-            "../../../../desktop/src/features/dkg-memory/proposalStates.json"
+            "../../../../shared/dkg-memory/proposal-states.json"
         ))
         .expect("checked-in DKG memory lifecycle contract must be valid JSON")
     })

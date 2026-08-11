@@ -1,6 +1,8 @@
 export type MemoryProposalProgress = "stored" | "processing" | "unknown";
 
-import proposalStates from "./proposalStates.json" with { type: "json" };
+import proposalStates from "../../../../shared/dkg-memory/proposal-states.json" with {
+  type: "json",
+};
 
 const STORED_STATES = new Set(proposalStates.stored);
 const PROCESSING_STATES = new Set(proposalStates.processing);

@@ -45,10 +45,36 @@ const EMPTY_EVENTS: ObserverEvent[] = [];
 const EMPTY_TRANSCRIPT: TranscriptItem[] = [];
 
 const listeners = new Set<() => void>();
-let observerStoreRevision = 0;
 const eventsByAgent = new Map<string, ObserverEvent[]>();
 const transcriptByAgent = new Map<string, TranscriptState>();
 const snapshotByAgent = new Map<string, ObserverSnapshot>();
+
+export type AgentObserverChannelSlice = {
+  events: readonly ObserverEvent[];
+  transcript: readonly TranscriptItem[];
+};
+
+export type AgentObserverChannelSnapshot = ReadonlyMap<
+  string,
+  AgentObserverChannelSlice
+>;
+
+type AgentObserverChannelSliceCache = {
+  sourceEvents: readonly ObserverEvent[];
+  sourceTranscript: readonly TranscriptItem[];
+  value: AgentObserverChannelSlice;
+};
+
+type AgentObserverChannelSnapshotCache = {
+  slices: ReadonlyMap<string, AgentObserverChannelSliceCache>;
+  snapshot: AgentObserverChannelSnapshot;
+};
+
+const EMPTY_CHANNEL_SNAPSHOT: AgentObserverChannelSnapshot = new Map();
+const channelSnapshotCache = new Map<
+  string,
+  AgentObserverChannelSnapshotCache
+>();
 
 // Channel-scoped archive event journal — holds paged history loaded from the local
 // SQLite archive without the MAX_OBSERVER_EVENTS live-relay cap. Keyed by
@@ -171,7 +197,6 @@ let eventProcessingQueue: Promise<void> = Promise.resolve();
 let generation = 0;
 
 function notifyListeners() {
-  observerStoreRevision += 1;
   for (const listener of listeners) {
     listener();
   }
@@ -518,14 +543,79 @@ export function subscribeAgentObserverStore(listener: () => void) {
   };
 }
 
+function sameItems<T>(left: readonly T[], right: readonly T[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((item, index) => item === right[index])
+  );
+}
+
 /**
- * Monotonic snapshot for channel-level consumers that aggregate more than one
- * agent. Individual agent hooks retain their memoized snapshots; aggregate
- * consumers subscribe once and read the relevant per-agent records after the
- * revision advances.
+ * Return one reference-stable observer snapshot for the agents displayed in a
+ * channel. Global store notifications still wake `useSyncExternalStore`, but
+ * events for unrelated agents or channels return the previous snapshot so the
+ * subscribing channel does not re-render.
  */
-export function getAgentObserverStoreRevision(): number {
-  return observerStoreRevision;
+export function getAgentObserverChannelSnapshot(
+  channelId: string | null | undefined,
+  agentPubkeys: readonly string[],
+): AgentObserverChannelSnapshot {
+  if (!channelId || agentPubkeys.length === 0) return EMPTY_CHANNEL_SNAPSHOT;
+  const keys = [...new Set(agentPubkeys.map(normalizePubkey))].sort();
+  if (keys.length === 0) return EMPTY_CHANNEL_SNAPSHOT;
+  const cacheKey = `${channelId}\u0000${keys.join("\u0000")}`;
+  const previous = channelSnapshotCache.get(cacheKey);
+  const nextSlices = new Map<string, AgentObserverChannelSliceCache>();
+  let snapshotChanged = !previous || previous.slices.size !== keys.length;
+
+  for (const key of keys) {
+    const sourceEvents = eventsByAgent.get(key) ?? EMPTY_EVENTS;
+    const sourceTranscript =
+      transcriptByAgent.get(key)?.items ?? EMPTY_TRANSCRIPT;
+    const cached = previous?.slices.get(key);
+    if (
+      cached &&
+      cached.sourceEvents === sourceEvents &&
+      cached.sourceTranscript === sourceTranscript
+    ) {
+      nextSlices.set(key, cached);
+      continue;
+    }
+
+    const events = sourceEvents.filter(
+      (event) => event.channelId === channelId,
+    );
+    const transcript = sourceTranscript.filter(
+      (item) => item.channelId === channelId,
+    );
+    const value =
+      cached &&
+      sameItems(cached.value.events, events) &&
+      sameItems(cached.value.transcript, transcript)
+        ? cached.value
+        : { events, transcript };
+    if (value !== cached?.value) snapshotChanged = true;
+    nextSlices.set(key, { sourceEvents, sourceTranscript, value });
+  }
+
+  if (!snapshotChanged && previous) {
+    channelSnapshotCache.set(cacheKey, {
+      slices: nextSlices,
+      snapshot: previous.snapshot,
+    });
+    return previous.snapshot;
+  }
+
+  const completeSnapshot = new Map<string, AgentObserverChannelSlice>();
+  for (const key of keys) {
+    const slice = nextSlices.get(key);
+    if (slice) completeSnapshot.set(key, slice.value);
+  }
+  channelSnapshotCache.set(cacheKey, {
+    slices: nextSlices,
+    snapshot: completeSnapshot,
+  });
+  return completeSnapshot;
 }
 
 function isControlResultFrame(payload: unknown): payload is ControlResultFrame {
@@ -788,6 +878,7 @@ export function resetAgentObserverStore() {
   eventsByAgent.clear();
   transcriptByAgent.clear();
   snapshotByAgent.clear();
+  channelSnapshotCache.clear();
   archiveEventsByChannel.clear();
   knownAgentPubkeys.clear();
   knownAgentsBySubscription.clear();

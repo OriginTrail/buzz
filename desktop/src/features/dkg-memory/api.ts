@@ -6,6 +6,7 @@
 // authorization input.
 import { relayClient } from "@/shared/api/relayClient";
 import { getRelayHttpUrl, signRelayEvent } from "@/shared/api/tauri";
+import { readDkgMemoryCapabilities } from "./capabilities";
 import { postAuthenticatedDkgJson, queryDkgProvider } from "./provider";
 import {
   memoryProposalProgress,
@@ -181,28 +182,8 @@ export async function runDkgDiagnostics(
   const relay = (await getRelayHttpUrl()).replace(/\/+$/, "");
   const checks: DkgDiagnosticCheck[] = [];
   const capability = await timedDiagnostic(async () => {
-    const response = await fetch(`${relay}/`, {
-      headers: { Accept: "application/nostr+json" },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!response.ok)
-      throw new Error(`Relay discovery returned ${response.status}.`);
-    const document = (await response.json()) as {
-      supported_extensions?: unknown;
-      dkg_memory?: { query_operations?: unknown };
-    };
-    const extensions = Array.isArray(document.supported_extensions)
-      ? document.supported_extensions
-      : [];
-    const operations = Array.isArray(document.dkg_memory?.query_operations)
-      ? document.dkg_memory.query_operations
-      : [];
-    if (
-      !extensions.some((entry) =>
-        ["buzz-dkg-memory-v1", "buzz-dkg-memory-v2"].includes(String(entry)),
-      ) ||
-      !operations.includes("semantic_query")
-    ) {
+    const discovered = await readDkgMemoryCapabilities(relay);
+    if (!discovered.memory || !discovered.semanticQuery) {
       throw new Error(
         "Relay does not advertise the required DKG memory capabilities.",
       );
