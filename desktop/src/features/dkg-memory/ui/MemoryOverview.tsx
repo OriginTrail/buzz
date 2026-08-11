@@ -7,9 +7,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import type { ChannelMemory } from "../api";
 import { explorerSource, nodeUiDeepLink } from "../api";
 import { useContributorTrail, useProfileNames } from "../hooks";
-import type { TopologyTarget } from "../topology/client";
 import { EvidenceCard } from "./EvidenceCard";
-import { GraphOverlay } from "./GraphOverlay";
+import { GraphOverlay, type GraphOverlayTarget } from "./GraphOverlay";
 import { MemorySearch } from "./MemorySearch";
 import { SoftwareMemoryQuery } from "./SoftwareMemoryQuery";
 
@@ -33,7 +32,9 @@ export function MemoryOverview({
   data: ChannelMemory & { gate: "ok" };
 }) {
   const [trailPubkey, setTrailPubkey] = useState<string | null>(null);
-  const [graphTarget, setGraphTarget] = useState<TopologyTarget | null>(null);
+  const [graphTarget, setGraphTarget] = useState<GraphOverlayTarget | null>(
+    null,
+  );
   const trail = useContributorTrail(channelId, cg, trailPubkey);
   const contributorPubkeys = (data.contributors ?? []).map(
     (contributor) => contributor.pubkey,
@@ -151,6 +152,30 @@ export function MemoryOverview({
                 title={latestDecision.name ?? latestDecision.uri}
                 at={latestDecision.at}
               />
+            </section>
+          )}
+
+          {sortedDecisions.length > 0 && topicCount === 0 && (
+            <section>
+              <SectionTitle icon={<Network />}>Timeline</SectionTitle>
+              <Button
+                type="button"
+                variant="outline"
+                size="xs"
+                onClick={() =>
+                  setGraphTarget({
+                    kind: "channel-decisions",
+                    decisions: sortedDecisions,
+                  })
+                }
+                title="Open all captured decisions as a traces timeline"
+                data-testid="dkg-subgraph-all-decisions"
+              >
+                All decisions
+                <span className="text-muted-foreground">
+                  {sortedDecisions.length}
+                </span>
+              </Button>
             </section>
           )}
 

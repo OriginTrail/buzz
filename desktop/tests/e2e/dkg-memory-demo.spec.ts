@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
+import { waitForMockLiveSubscription } from "../helpers/subscriptions";
 
 // Demo screenshots for the Buzz-native DKG memory panel: a realistic
 // deliberation timeline plus the panel resolving the REAL web-of-trust
@@ -12,22 +13,6 @@ const WOT_CG = "0x633E5a7C5e612d9981538F60D824cC03be97e2Ab/web-of-trust";
 
 function skipLiveDkgDemoInCi() {
   test.skip(Boolean(process.env.CI), "requires a reachable DKG provider");
-}
-
-async function waitForMockLiveSubscription(
-  page: import("@playwright/test").Page,
-  channelName: string,
-) {
-  await expect
-    .poll(() =>
-      page.evaluate(
-        ({ channelName }) =>
-          window.__BUZZ_E2E_HAS_MOCK_LIVE_SUBSCRIPTION__?.({ channelName }) ??
-          false,
-        { channelName },
-      ),
-    )
-    .toBe(true);
 }
 
 async function emit(page: import("@playwright/test").Page, content: string) {
