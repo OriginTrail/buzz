@@ -19,6 +19,7 @@ import {
   attributionLegend,
   attributionNodeColors,
   splitGraphTriplesForShelf,
+  topologySummary,
 } from "./topology";
 
 const RdfGraph = lazy(() =>
@@ -115,6 +116,10 @@ export function TopologyView({
       })),
     [shaped.canvasTriples],
   );
+  const summary = useMemo(
+    () => topologySummary(shaped.canvasTriples),
+    [shaped.canvasTriples],
+  );
 
   if (query.isLoading) {
     return (
@@ -170,6 +175,8 @@ export function TopologyView({
             </span>
           ))}
         <span className="ml-auto text-2xs text-muted-foreground">
+          {summary.entities} connected entities · {summary.relationships}{" "}
+          relationships ·{" "}
           {channelWide
             ? "bounded channel view · use search to narrow further"
             : colorMode === "attribution"

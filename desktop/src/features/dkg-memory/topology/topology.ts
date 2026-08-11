@@ -104,6 +104,30 @@ export function splitGraphTriplesForShelf(triples: TopologyTriple[]): {
   };
 }
 
+export function topologySummary(triples: TopologyTriple[]): {
+  entities: number;
+  relationships: number;
+} {
+  const entities = new Set<string>();
+  const relationships = new Set<string>();
+  for (const triple of triples) {
+    const subject = graphNodeKey(triple.subject);
+    entities.add(subject);
+    if (
+      graphNodeKey(triple.predicate) === RDF_TYPE_URI ||
+      !isResourceNode(triple.object)
+    ) {
+      continue;
+    }
+    const object = graphNodeKey(triple.object);
+    entities.add(object);
+    relationships.add(
+      `${subject}\0${graphNodeKey(triple.predicate)}\0${object}`,
+    );
+  }
+  return { entities: entities.size, relationships: relationships.size };
+}
+
 const MAX_TRIPLES = 2500;
 export function applyHeaviestSubjectsCap(
   triples: TopologyTriple[],
