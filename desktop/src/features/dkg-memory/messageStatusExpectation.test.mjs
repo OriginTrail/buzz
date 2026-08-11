@@ -218,7 +218,12 @@ test("a mounted non-DKG relay suppresses badges and observer subscription", asyn
         "capabilities",
         "https://relay.example",
       ]),
-      { memory: false, semanticQuery: false, trust: false },
+      {
+        memory: false,
+        semanticQuery: false,
+        trust: false,
+        reputation: false,
+      },
     ),
   );
   assert.equal(view.getByTestId("memory").textContent, "none");

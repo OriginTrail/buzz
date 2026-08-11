@@ -28,11 +28,13 @@ export function MemoryOverview({
   cg,
   data,
   trustAvailable,
+  reputationAvailable,
 }: {
   channelId: string;
   cg: string | null;
   data: ChannelMemory & { gate: "ok" };
   trustAvailable: boolean;
+  reputationAvailable: boolean;
 }) {
   const [trailPubkey, setTrailPubkey] = useState<string | null>(null);
   const [graphTarget, setGraphTarget] = useState<GraphOverlayTarget | null>(
@@ -292,7 +294,10 @@ export function MemoryOverview({
 
         {trustAvailable && (
           <TabsContent value="trust" className="space-y-4">
-            <WebOfTrustPanel channelId={channelId} />
+            <WebOfTrustPanel
+              channelId={channelId}
+              reputationAvailable={reputationAvailable}
+            />
           </TabsContent>
         )}
       </Tabs>

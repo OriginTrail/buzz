@@ -13,5 +13,10 @@
   "trust": {
     "profile": "dkg-trust@1",
     "operation": "trust_network"
+  },
+  "reputation": {
+    "operation": "reputation_summary",
+    "max_hops": 2,
+    "methodology": "dkg-reputation-v1"
   }
 }

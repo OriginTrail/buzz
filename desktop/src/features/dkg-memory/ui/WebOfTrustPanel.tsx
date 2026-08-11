@@ -14,8 +14,12 @@ import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { Textarea } from "@/shared/ui/textarea";
 import { truncatePubkey } from "@/shared/lib/pubkey";
-import { publishTrustVouch } from "../api";
-import { useProfileNames, useTrustNetwork } from "../hooks";
+import { publishTrustVouch, type ReputationSummary } from "../api";
+import {
+  useProfileNames,
+  useReputationSummary,
+  useTrustNetwork,
+} from "../hooks";
 
 function labelFor(
   pubkey: string,
@@ -31,7 +35,13 @@ function sourceId(uri: string | null): string | null {
     : uri;
 }
 
-export function WebOfTrustPanel({ channelId }: { channelId: string }) {
+export function WebOfTrustPanel({
+  channelId,
+  reputationAvailable,
+}: {
+  channelId: string;
+  reputationAvailable: boolean;
+}) {
   const queryClient = useQueryClient();
   const identity = useIdentityQuery();
   const network = useTrustNetwork(channelId);
@@ -74,6 +84,10 @@ export function WebOfTrustPanel({ channelId }: { channelId: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const activePubkey = selected ?? people[0]?.pubkey ?? null;
   const activePerson = people.find((person) => person.pubkey === activePubkey);
+  const reputation = useReputationSummary(
+    reputationAvailable ? channelId : null,
+    activePubkey,
+  );
   const received = (network.data?.vouches ?? []).filter(
     (vouch) => vouch.subject === activePubkey && vouch.status === "active",
   );
@@ -97,6 +111,9 @@ export function WebOfTrustPanel({ channelId }: { channelId: string }) {
       );
       await queryClient.invalidateQueries({
         queryKey: ["dkg-memory", "trust-network", channelId],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["dkg-memory", "reputation-summary", channelId],
       });
     },
   });
@@ -131,10 +148,13 @@ export function WebOfTrustPanel({ channelId }: { channelId: string }) {
         <div className="flex items-start gap-2.5">
           <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
           <div>
-            <p className="text-xs font-semibold">Evidence, not a score</p>
+            <p className="text-xs font-semibold">
+              Contextual, explainable reputation
+            </p>
             <p className="mt-1 text-2xs leading-relaxed text-muted-foreground">
               Vouches are signed by people. Contribution counts and every trust
-              relationship stay linked to their channel evidence.
+              relationship stay linked to their channel evidence. The score is
+              specific to this channel and never grants permissions.
             </p>
           </div>
         </div>
@@ -207,6 +227,14 @@ export function WebOfTrustPanel({ channelId }: { channelId: string }) {
             />
             <Metric label="Vouches given" value={activePerson.vouchesGiven} />
           </div>
+
+          {reputationAvailable && (
+            <ReputationCard
+              isLoading={reputation.isLoading}
+              error={reputation.error}
+              data={reputation.data}
+            />
+          )}
 
           <div>
             <p className="mb-2 flex items-center gap-1.5 text-xs font-medium">
@@ -317,6 +345,111 @@ function Metric({ label, value }: { label: string; value: number }) {
     <div className="rounded-lg bg-muted/40 p-2">
       <div className="text-sm font-semibold tabular-nums">{value}</div>
       <div className="text-3xs text-muted-foreground">{label}</div>
+    </div>
+  );
+}
+
+function ReputationCard({
+  isLoading,
+  error,
+  data,
+}: {
+  isLoading: boolean;
+  error: Error | null;
+  data: ReputationSummary | undefined;
+}) {
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 rounded-lg border border-border/70 p-3 text-2xs text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Calculating bounded reputation paths…
+      </div>
+    );
+  }
+  if (error || !data) {
+    return (
+      <div className="rounded-lg border border-border/70 p-3 text-2xs text-muted-foreground">
+        {error?.message ?? "Reputation evidence is not available yet."}
+      </div>
+    );
+  }
+
+  const dimensions = [
+    ["Direct trust", data.breakdown.directTrust],
+    ["Network trust", data.breakdown.networkTrust],
+    ["Demonstrated work", data.breakdown.demonstratedWork],
+    ["Evidence diversity", data.breakdown.evidenceDiversity],
+  ] as const;
+  const confidenceVariant =
+    data.confidence === "high"
+      ? "success"
+      : data.confidence === "medium"
+        ? "info"
+        : data.confidence === "low"
+          ? "warning"
+          : "secondary";
+
+  return (
+    <div
+      className="space-y-3 rounded-xl border border-primary/20 bg-primary/5 p-3"
+      data-testid="dkg-reputation-summary"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs font-semibold">Channel reputation</p>
+          <p className="mt-0.5 text-3xs text-muted-foreground">
+            From your perspective · maximum two trust hops
+          </p>
+        </div>
+        <div className="text-right">
+          <div
+            className="text-2xl font-semibold tabular-nums leading-none"
+            data-testid="dkg-reputation-score"
+          >
+            {data.score}
+            <span className="text-xs font-normal text-muted-foreground">
+              /100
+            </span>
+          </div>
+          <Badge className="mt-1" variant={confidenceVariant}>
+            {data.confidence} confidence
+          </Badge>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        {dimensions.map(([label, value]) => (
+          <div key={label}>
+            <div className="mb-1 flex items-center justify-between text-3xs">
+              <span className="text-muted-foreground">{label}</span>
+              <span className="font-medium tabular-nums">{value}</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-primary transition-[width]"
+                style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div>
+        <p className="text-2xs font-medium">Why this score</p>
+        <ul className="mt-1.5 space-y-1 text-3xs text-muted-foreground">
+          {data.reasons.map((reason) => (
+            <li key={reason} className="flex gap-1.5">
+              <span aria-hidden="true">•</span>
+              <span>{reason}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <p className="border-t border-primary/10 pt-2 text-3xs text-muted-foreground">
+        Method: {data.methodology}. This advisory score is calculated from
+        bounded graph evidence; it is not a universal identity rating.
+      </p>
     </div>
   );
 }

@@ -21,6 +21,7 @@ async function advertiseDkgMemory(page: import("@playwright/test").Page) {
             "channel_memory",
             "semantic_query",
             "trust_network",
+            "reputation_summary",
           ],
           schema_versions: [2],
           semantic_query: {
@@ -50,6 +51,7 @@ test("channel memory exposes graph and authenticated search without named subgra
             "channel_memory",
             "semantic_query",
             "trust_network",
+            "reputation_summary",
           ],
           schema_versions: [2],
           semantic_query: {
@@ -177,6 +179,33 @@ test("channel memory exposes graph and authenticated search without named subgra
           },
         ],
       };
+    } else if (request.operation === "reputation_summary") {
+      result = {
+        subject: request.arguments.pubkey,
+        perspective: "cafebabe".repeat(8),
+        context: "channel",
+        score: 74,
+        confidence: "high",
+        breakdown: {
+          directTrust: 100,
+          networkTrust: 60,
+          demonstratedWork: 50,
+          evidenceDiversity: 92,
+        },
+        signals: {
+          directVouch: true,
+          twoHopVouchers: 1,
+          independentVouchers: 3,
+          evidenceRecords: 4,
+          verifiableEvidence: false,
+        },
+        reasons: [
+          "3 independent contributors signed a vouch.",
+          "1 vouch arrived through a two-hop trust path.",
+        ],
+        evidence: [],
+        methodology: "dkg-reputation-v1",
+      };
     } else {
       result = {};
     }
@@ -232,13 +261,18 @@ test("channel memory exposes graph and authenticated search without named subgra
 
   await panel.getByRole("tab", { name: "Trust" }).click();
   await expect(panel.getByTestId("dkg-web-of-trust")).toBeVisible();
-  await expect(panel.getByText("Evidence, not a score")).toBeVisible();
+  await expect(
+    panel.getByText("Contextual, explainable reputation"),
+  ).toBeVisible();
   await expect(
     panel.getByText(
       "Caught a rollback edge case while reviewing two releases.",
     ),
   ).toBeVisible();
   await expect(panel.getByText("Evidence records")).toBeVisible();
+  await expect(panel.getByTestId("dkg-reputation-summary")).toBeVisible();
+  await expect(panel.getByTestId("dkg-reputation-score")).toHaveText("74/100");
+  await expect(panel.getByText("Why this score")).toBeVisible();
   await waitForAnimations(page);
   await panel.screenshot({
     path: "test-results/dkg-memory-beta/panel-trust.png",

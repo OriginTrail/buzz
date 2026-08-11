@@ -7,6 +7,7 @@ import {
   deriveContextGraphId,
   fetchChannelMemory,
   fetchDecisionTrace,
+  fetchReputationSummary,
   fetchSemanticQuery,
   fetchSoftwareContributors,
   fetchTrustNetwork,
@@ -452,6 +453,55 @@ test("web of trust uses a fixed channel-scoped operation, never client SPARQL", 
   assert.equal(result.gate, "ok");
   assert.equal(result.cg, "server-cg");
   assert.equal(result.people[0].contributions, 3);
+});
+
+test("reputation uses a fixed subject query and returns an explainable bounded score", async () => {
+  installTauri();
+  let body;
+  globalThis.fetch = async (_url, init) => {
+    body = JSON.parse(String(init.body));
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        channelId: body.channelId,
+        cg: "server-cg",
+        operation: body.operation,
+        result: {
+          subject: "b".repeat(64),
+          perspective: "a".repeat(64),
+          context: "channel",
+          score: 74,
+          confidence: "high",
+          breakdown: {
+            directTrust: 100,
+            networkTrust: 60,
+            demonstratedWork: 50,
+            evidenceDiversity: 92,
+          },
+          signals: {
+            directVouch: true,
+            twoHopVouchers: 1,
+            independentVouchers: 3,
+            evidenceRecords: 4,
+            verifiableEvidence: false,
+          },
+          reasons: ["Three independent people signed vouches."],
+          evidence: [],
+          methodology: "dkg-reputation-v1",
+        },
+      }),
+    );
+  };
+
+  const result = await fetchReputationSummary(CHANNEL_ID, "b".repeat(64));
+  assert.deepEqual(body, {
+    channelId: CHANNEL_ID,
+    operation: "reputation_summary",
+    arguments: { pubkey: "b".repeat(64) },
+  });
+  assert.equal(JSON.stringify(body).includes("sparql"), false);
+  assert.equal(result.score, 74);
+  assert.equal(result.methodology, "dkg-reputation-v1");
 });
 
 test("a vouch signs and publishes human evidence before proposing its DKG projection", async () => {

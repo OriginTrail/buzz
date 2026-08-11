@@ -120,6 +120,7 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
           cg={cg}
           data={panelState.data}
           trustAvailable={capabilities.data?.trust ?? false}
+          reputationAvailable={capabilities.data?.reputation ?? false}
         />
       )}
     </PanelShell>

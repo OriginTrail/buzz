@@ -58,6 +58,7 @@ enum Operation {
     SoftwareContributors,
     DecisionTrace,
     TrustNetwork,
+    ReputationSummary,
     SubgraphGraph,
     SubgraphTriples,
     Evidence,
@@ -236,6 +237,13 @@ fn parse_and_sanitize_request(
         }
         Operation::TrustNetwork => {
             let arguments: EmptyArguments = parse_arguments(request.arguments)?;
+            serde_json::to_value(arguments)
+        }
+        Operation::ReputationSummary => {
+            let mut arguments: PubkeyArguments = parse_arguments(request.arguments)?;
+            arguments.pubkey = nostr::PublicKey::from_hex(&arguments.pubkey)
+                .map_err(|_| api_error(StatusCode::BAD_REQUEST, "arguments.pubkey is invalid"))?
+                .to_hex();
             serde_json::to_value(arguments)
         }
         Operation::ContributorTrail => {
@@ -499,6 +507,10 @@ mod tests {
         for (operation, arguments) in [
             ("channel_memory", serde_json::json!({})),
             ("trust_network", serde_json::json!({})),
+            (
+                "reputation_summary",
+                serde_json::json!({ "pubkey": nostr::Keys::generate().public_key().to_hex() }),
+            ),
             (
                 "contributor_trail",
                 serde_json::json!({ "pubkey": nostr::Keys::generate().public_key().to_hex() }),

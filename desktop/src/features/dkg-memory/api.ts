@@ -131,6 +131,32 @@ export interface TrustNetwork {
   vouches: TrustVouch[];
 }
 
+export interface ReputationSummary {
+  gate: MemoryGate;
+  cg?: string;
+  subject: string;
+  perspective: string;
+  context: "channel";
+  score: number;
+  confidence: "none" | "low" | "medium" | "high";
+  breakdown: {
+    directTrust: number;
+    networkTrust: number;
+    demonstratedWork: number;
+    evidenceDiversity: number;
+  };
+  signals: {
+    directVouch: boolean;
+    twoHopVouchers: number;
+    independentVouchers: number;
+    evidenceRecords: number;
+    verifiableEvidence: boolean;
+  };
+  reasons: string[];
+  evidence: TrustVouch[];
+  methodology: "dkg-reputation-v1";
+}
+
 export interface SemanticQueryLayer {
   layer: "SWM" | "VM";
   bindings: Record<string, unknown>[];
@@ -460,6 +486,19 @@ export async function fetchTrustNetwork(
     channelId,
     operation: "trust_network",
     arguments: {},
+    localPath: null,
+  });
+}
+
+/** Calculate a bounded, explainable reputation lens for this channel. */
+export async function fetchReputationSummary(
+  channelId: string,
+  pubkey: string,
+): Promise<ReputationSummary> {
+  return queryDkgProvider<ReputationSummary, "reputation_summary">({
+    channelId,
+    operation: "reputation_summary",
+    arguments: { pubkey },
     localPath: null,
   });
 }
