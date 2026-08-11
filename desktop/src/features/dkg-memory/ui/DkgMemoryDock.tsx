@@ -6,7 +6,7 @@ import { MemoryPanel } from "./MemoryPanel";
 import { useDkgMemoryDockOpen } from "./memoryDockStore";
 
 export function DkgMemoryDock({ channelId }: { channelId: string | null }) {
-  const open = useDkgMemoryDockOpen();
+  const open = useDkgMemoryDockOpen(channelId);
   if (!channelId || !open) return null;
   return (
     <aside

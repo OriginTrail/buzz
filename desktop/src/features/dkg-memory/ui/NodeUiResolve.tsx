@@ -5,8 +5,7 @@
 import { useState } from "react";
 import { explorerSource, nodeUiDeepLink } from "../api";
 
-const EDGE_NODE_GUIDE =
-  "https://github.com/Zigoljube/buzz-dkg-integration-ot/blob/ot-rfc-67-reference-instance/docs/ot-rfc-67/BUILDING.md";
+const EDGE_NODE_GUIDE = "https://github.com/OriginTrail/buzz-dkg-integration";
 
 export function NodeUiResolve({
   cg,

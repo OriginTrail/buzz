@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-let open = false;
+let openChannelId: string | null = null;
 const listeners = new Set<() => void>();
 
 function subscribe(listener: () => void) {
@@ -8,16 +8,35 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
-export function setDkgMemoryDockOpen(next: boolean) {
-  if (open === next) return;
-  open = next;
+function emit() {
   for (const listener of listeners) listener();
 }
 
-export function useDkgMemoryDockOpen() {
+export function toggleDkgMemoryDock(channelId: string) {
+  const next = openChannelId === channelId ? null : channelId;
+  if (next === openChannelId) return;
+  openChannelId = next;
+  emit();
+}
+
+export function closeDkgMemoryDock() {
+  if (openChannelId === null) return;
+  openChannelId = null;
+  emit();
+}
+
+export function resetDkgMemoryDockState() {
+  closeDkgMemoryDock();
+}
+
+export function isDkgMemoryDockOpen(channelId: string | null): boolean {
+  return channelId !== null && openChannelId === channelId;
+}
+
+export function useDkgMemoryDockOpen(channelId: string | null) {
   return useSyncExternalStore(
     subscribe,
-    () => open,
+    () => isDkgMemoryDockOpen(channelId),
     () => false,
   );
 }
