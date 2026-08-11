@@ -1458,6 +1458,7 @@ fn is_dkg_recall_stop_word(word: &str) -> bool {
             | "are"
             | "can"
             | "channel"
+            | "check"
             | "could"
             | "did"
             | "does"
@@ -1466,6 +1467,8 @@ fn is_dkg_recall_stop_word(word: &str) -> bool {
             | "from"
             | "have"
             | "help"
+            | "hello"
+            | "hey"
             | "how"
             | "into"
             | "just"
@@ -1473,10 +1476,14 @@ fn is_dkg_recall_stop_word(word: &str) -> bool {
             | "make"
             | "need"
             | "now"
+            | "okay"
             | "please"
             | "should"
             | "some"
+            | "sure"
             | "that"
+            | "thank"
+            | "thanks"
             | "the"
             | "their"
             | "then"
@@ -1492,6 +1499,8 @@ fn is_dkg_recall_stop_word(word: &str) -> bool {
             | "will"
             | "with"
             | "would"
+            | "yeah"
+            | "yes"
             | "you"
             | "your"
     )
@@ -1535,11 +1544,17 @@ fn dkg_recall_sparql(terms: &[String]) -> Option<String> {
     if terms.is_empty() {
         return None;
     }
-    let values = terms
+    let filters = terms
         .iter()
-        .map(|term| serde_json::to_string(term).unwrap_or_else(|_| "\"\"".to_string()))
+        .map(|term| {
+            let literal =
+                serde_json::to_string(term).unwrap_or_else(|_| "\"\"".to_string());
+            format!(
+                "(CONTAINS(LCASE(STR(?name)), {literal}) || CONTAINS(LCASE(COALESCE(STR(?description), \"\")), {literal}))"
+            )
+        })
         .collect::<Vec<_>>()
-        .join(" ");
+        .join(" || ");
     Some(format!(
         "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
          PREFIX schema: <http://schema.org/>\n\
@@ -1548,8 +1563,7 @@ fn dkg_recall_sparql(terms: &[String]) -> Option<String> {
              ?entity schema:name ?name .\n\
              OPTIONAL {{ ?entity schema:description ?description . }}\n\
              OPTIONAL {{ ?entity rdf:type ?type . }}\n\
-             VALUES ?needle {{ {values} }}\n\
-             FILTER(CONTAINS(LCASE(STR(?name)), ?needle) || (BOUND(?description) && CONTAINS(LCASE(STR(?description)), ?needle)))\n\
+             FILTER({filters})\n\
            }}\n\
          }}\n\
          LIMIT {DKG_RECALL_ROW_LIMIT}"
@@ -4542,13 +4556,20 @@ mod tests {
         let terms = dkg_recall_terms(&batch);
         assert_eq!(
             terms,
-            vec!["check", "x402", "payment", "decision", "verifytoken"]
+            vec![
+                "x402",
+                "payment",
+                "decision",
+                "verifytoken",
+                "implementation"
+            ]
         );
         assert_eq!(terms.len(), DKG_RECALL_TERM_LIMIT);
 
         let query = dkg_recall_sparql(&terms).expect("query");
         assert!(query.contains("schema:name"));
         assert!(query.contains("\"x402\""));
+        assert!(!query.contains("VALUES"));
         assert!(query.ends_with("LIMIT 8"));
         assert!(!query.contains(&batch.channel_id.to_string()));
     }
