@@ -2053,14 +2053,13 @@ pub async fn run_prompt_task(
             },
         );
         let rest_client = &ctx.rest_client;
-        if let Some(memory) =
-            crate::dkg_recall::recall_for_batch(ctx.dkg_semantic_query, b, |request| async move {
-                rest_client.query_dkg(&request).await
-            })
-            .await
-        {
-            sections.push(memory);
-        }
+        crate::dkg_recall::append_for_batch(
+            &mut sections,
+            ctx.dkg_semantic_query,
+            b,
+            |request| async move { rest_client.query_dkg(&request).await },
+        )
+        .await;
         sections
     } else {
         // Should not happen — batch is None only for heartbeats which have prompt_text.
