@@ -533,6 +533,10 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&processing).unwrap()["state"],
             "processing"
         );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&processing).unwrap()["internalState"],
+            "distilled"
+        );
 
         let (stored, progress) =
             normalize_proposal_response(r#"{"ok":true,"outcome":"duplicate","state":"receipted"}"#)
@@ -541,6 +545,10 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&stored).unwrap()["state"],
             "stored"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&stored).unwrap()["internalState"],
+            "receipted"
         );
     }
 
@@ -554,7 +562,9 @@ mod tests {
         )
         .await;
         assert_eq!(refreshes + 1, 2, "initial post plus one refresh");
-        assert_eq!(stored.response, r#"{"state":"stored"}"#);
+        let stored_response = serde_json::from_str::<serde_json::Value>(&stored.response).unwrap();
+        assert_eq!(stored_response["state"], "stored");
+        assert_eq!(stored_response["internalState"], "receipted");
         assert!(stored.refresh_error.is_none());
 
         let (immediate, refreshes) = test_poll(
@@ -565,7 +575,10 @@ mod tests {
         )
         .await;
         assert_eq!(refreshes, 0);
-        assert_eq!(immediate.response, r#"{"state":"processing"}"#);
+        let immediate_response =
+            serde_json::from_str::<serde_json::Value>(&immediate.response).unwrap();
+        assert_eq!(immediate_response["state"], "processing");
+        assert_eq!(immediate_response["internalState"], "distilled");
 
         let (timed_out, refreshes) = test_poll(
             r#"{"state":"processing"}"#,
