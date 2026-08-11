@@ -1,4 +1,4 @@
-import { LogIn, SquareTerminal } from "lucide-react";
+import { BrainCircuit, LogIn, SquareTerminal, X } from "lucide-react";
 import type * as React from "react";
 
 import { ChatHeader } from "@/features/chat/ui/ChatHeader";
@@ -21,6 +21,10 @@ import {
   toggleTerminalPanel,
   useTerminalPanel,
 } from "@/features/terminal/terminalPanelStore";
+import {
+  setDkgMemoryDockOpen,
+  useDkgMemoryDockOpen,
+} from "@/features/dkg-memory/ui/memoryDockStore";
 
 const DM_HEADER_AVATAR_SIZE = 32;
 const DM_HEADER_AVATAR_STATUS_GEOMETRY = scaleProfileAvatarStatusGeometry(
@@ -79,6 +83,21 @@ export function ChannelScreenHeader({
     onJoinChannel;
 
   const terminalPanel = useTerminalPanel();
+  const isMemoryOpen = useDkgMemoryDockOpen();
+  const memoryButton = activeChannel ? (
+    <Button
+      aria-label={isMemoryOpen ? "Close channel memory" : "Open channel memory"}
+      data-testid="dkg-memory-toggle"
+      onClick={() => setDkgMemoryDockOpen(!isMemoryOpen)}
+      size={isMemoryOpen ? "icon" : "sm"}
+      title={isMemoryOpen ? "Close channel memory" : "Open channel memory"}
+      type="button"
+      variant={isMemoryOpen ? "secondary" : "outline"}
+    >
+      {isMemoryOpen ? <X /> : <BrainCircuit className="text-primary" />}
+      {isMemoryOpen ? null : <span>Memory</span>}
+    </Button>
+  ) : null;
   const terminalButton = activeChannel ? (
     <Button
       aria-label={
@@ -118,6 +137,7 @@ export function ChannelScreenHeader({
   ) : null;
   const actions = activeChannel ? (
     <div className="flex items-center gap-1">
+      {memoryButton}
       {terminalButton}
       {channelActions}
     </div>
