@@ -121,7 +121,13 @@ struct DkgCapabilities {
 }
 
 mod dkg_capability_contract {
-    include!(concat!(env!("OUT_DIR"), "/dkg_capability_contract.rs"));
+    pub const MEMORY_V1_EXTENSION: &str = "buzz-dkg-memory-v1";
+    pub const MEMORY_V2_EXTENSION: &str = "buzz-dkg-memory-v2";
+    pub const MEMORY_V2_SCHEMA_VERSION: u64 = 2;
+    pub const MEMORY_V2_PROFILE: &str = "dkg-memory@1";
+    pub const SEMANTIC_QUERY_OPERATION: &str = "semantic_query";
+    pub const SEMANTIC_QUERY_SCOPE: &str = "current_channel";
+    pub const SEMANTIC_QUERY_REQUIRED_FORMS: &[&str] = &["select", "ask"];
 }
 
 fn nip11_dkg_memory_schema(value: &serde_json::Value) -> Option<u8> {
@@ -4216,6 +4222,42 @@ mod agent_draft_prompt_tests {
 #[cfg(test)]
 mod dkg_memory_prompt_tests {
     use super::*;
+
+    #[test]
+    fn typed_capability_constants_match_the_shared_contract() {
+        let contract: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../shared/dkg-memory/capability-contract.json"
+        ))
+        .expect("shared capability contract must be valid JSON");
+        assert_eq!(
+            contract["memory"]["v1_extension"],
+            dkg_capability_contract::MEMORY_V1_EXTENSION
+        );
+        assert_eq!(
+            contract["memory"]["v2_extension"],
+            dkg_capability_contract::MEMORY_V2_EXTENSION
+        );
+        assert_eq!(
+            contract["memory"]["v2_schema_version"],
+            dkg_capability_contract::MEMORY_V2_SCHEMA_VERSION
+        );
+        assert_eq!(
+            contract["memory"]["v2_profile"],
+            dkg_capability_contract::MEMORY_V2_PROFILE
+        );
+        assert_eq!(
+            contract["semantic_query"]["operation"],
+            dkg_capability_contract::SEMANTIC_QUERY_OPERATION
+        );
+        assert_eq!(
+            contract["semantic_query"]["scope"],
+            dkg_capability_contract::SEMANTIC_QUERY_SCOPE
+        );
+        assert_eq!(
+            contract["semantic_query"]["required_forms"],
+            serde_json::json!(dkg_capability_contract::SEMANTIC_QUERY_REQUIRED_FORMS)
+        );
+    }
 
     #[test]
     fn capability_detection_is_exact_and_fail_closed() {
