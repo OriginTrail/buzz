@@ -444,7 +444,7 @@ export const ChannelPane = React.memo(function ChannelPane({
     profiles,
     threadAllMessages,
     threadHeadMessage,
-  });
+  ]);
 
   const isOverlay = useIsThreadPanelOverlay();
   const useSplitAuxiliaryPane = !isSinglePanelView && !isOverlay;

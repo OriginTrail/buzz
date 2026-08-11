@@ -22,7 +22,7 @@ import {
   useTerminalPanel,
 } from "@/features/terminal/terminalPanelStore";
 import {
-  setDkgMemoryDockOpen,
+  toggleDkgMemoryDock,
   useDkgMemoryDockOpen,
 } from "@/features/dkg-memory/ui/memoryDockStore";
 
@@ -83,12 +83,13 @@ export function ChannelScreenHeader({
     onJoinChannel;
 
   const terminalPanel = useTerminalPanel();
-  const isMemoryOpen = useDkgMemoryDockOpen();
+  const activeChannelId = activeChannel?.id ?? null;
+  const isMemoryOpen = useDkgMemoryDockOpen(activeChannelId);
   const memoryButton = activeChannel ? (
     <Button
       aria-label={isMemoryOpen ? "Close channel memory" : "Open channel memory"}
       data-testid="dkg-memory-toggle"
-      onClick={() => setDkgMemoryDockOpen(!isMemoryOpen)}
+      onClick={() => activeChannelId && toggleDkgMemoryDock(activeChannelId)}
       size={isMemoryOpen ? "icon" : "sm"}
       title={isMemoryOpen ? "Close channel memory" : "Open channel memory"}
       type="button"

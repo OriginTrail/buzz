@@ -66,7 +66,6 @@ type MessageThreadPanelProps = ThreadPanelLayoutProps & {
   isHuddleTranscript?: boolean;
   editTarget?: MessageComposerEditTarget | null;
   isSending: boolean;
-  /** Feature-owned content rendered between each message body and reactions. */
   messageBodyAdornments?: ReadonlyMap<string, React.ReactNode>;
   onCancelEdit?: () => void;
   onCancelReply: () => void;
@@ -375,7 +374,6 @@ export function MessageThreadPanel({
     !isHuddleTranscript &&
     isFocusMode &&
     (threadRepliesPending || repliesRenderState === "list");
-
   const threadMessages = React.useMemo(
     () => deferredThreadReplies.map((entry) => entry.message),
     [deferredThreadReplies],
