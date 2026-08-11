@@ -200,3 +200,104 @@ test("channel topology fetches labels for bounded relationship endpoints", async
     globalThis.localStorage = previousLocalStorage;
   }
 });
+
+test("channel topology retains successful slices and rejects when every relation slice fails", async () => {
+  const previousFetch = globalThis.fetch;
+  const previousWindow = globalThis.window;
+  const previousLocalStorage = globalThis.localStorage;
+  globalThis.window = {
+    ...(globalThis.window ?? {}),
+    __TAURI_INTERNALS__: {
+      invoke: async (command, args) => {
+        if (command === "get_relay_http_url") return "https://relay.example";
+        if (command === "sign_event") {
+          return JSON.stringify({ kind: 27235, content: "", tags: args.tags });
+        }
+        throw new Error(`unexpected Tauri command: ${command}`);
+      },
+    },
+  };
+  globalThis.localStorage = { getItem: () => null };
+
+  const ok = (request, bindings) =>
+    new Response(
+      JSON.stringify({
+        ok: true,
+        channelId: request.channelId,
+        cg: "server-cg",
+        operation: "semantic_query",
+        result: {
+          queryType: "select",
+          scope: { type: "current_channel" },
+          layers: [{ layer: "SWM", bindings }],
+        },
+      }),
+    );
+  const busy = () =>
+    new Response(
+      JSON.stringify({
+        ok: false,
+        error: { code: "upstream_busy", message: "Blazegraph is busy" },
+      }),
+      { status: 503, headers: { "content-type": "application/json" } },
+    );
+
+  try {
+    const partialRequests = [];
+    globalThis.fetch = async (_url, init) => {
+      const request = JSON.parse(init.body);
+      partialRequests.push(request);
+      const sparql = request.arguments.sparql;
+      if (partialRequests.length === 1) return busy();
+      if (sparql.includes("decisions:affects")) {
+        return ok(request, [
+          {
+            subject: "urn:decision:x402",
+            predicate: "http://dkg.io/ontology/decisions/affects",
+            object: "urn:component:payments",
+          },
+        ]);
+      }
+      if (sparql.includes("VALUES ?subject")) {
+        return ok(request, [
+          {
+            subject: "urn:decision:x402",
+            predicate: "http://schema.org/name",
+            object: '"Adopt x402 payments"',
+          },
+        ]);
+      }
+      return ok(request, []);
+    };
+
+    const partial = await fetchTopologyTriples("partial-channel", null, {
+      kind: "channel",
+    });
+    assert.equal(partial.gate, "ok");
+    assert.equal(partialRequests.length, 4);
+    assert.match(partialRequests.at(-1).arguments.sparql, /VALUES \?subject/);
+    assert.ok(
+      partial.triples.some(
+        ({ predicate }) =>
+          predicate === "http://dkg.io/ontology/decisions/affects",
+      ),
+    );
+
+    resetDkgMemoryProvider();
+    let failedRequests = 0;
+    globalThis.fetch = async () => {
+      failedRequests += 1;
+      return busy();
+    };
+    await assert.rejects(
+      fetchTopologyTriples("failed-channel", null, { kind: "channel" }),
+      /Blazegraph is busy/,
+    );
+    assert.equal(failedRequests, 3);
+  } finally {
+    resetDkgMemoryProvider();
+    globalThis.fetch = previousFetch;
+    globalThis.window = previousWindow;
+    globalThis.localStorage = previousLocalStorage;
+  }
+});

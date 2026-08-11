@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { waitForAnimations } from "../helpers/animations";
 import { installMockBridge } from "../helpers/bridge";
 
 const CG = "buzz-test-channel";
@@ -9,6 +10,8 @@ const AGENTS_CHANNEL_ID = "94a444a4-c0a3-5966-ab05-530c6ddc2301";
 test("channel memory exposes graph and authenticated search without named subgraphs", async ({
   page,
 }) => {
+  let memoryChannelId: string | null = null;
+  const searchRequests: { channelId: string; operation: string }[] = [];
   await page.route("http://localhost:3000/", async (route) => {
     await route.fulfill({
       status: 200,
@@ -27,6 +30,7 @@ test("channel memory exposes graph and authenticated search without named subgra
     };
     let result: unknown;
     if (request.operation === "channel_memory") {
+      memoryChannelId = request.channelId;
       result = {
         layers: {
           WM: null,
@@ -49,6 +53,12 @@ test("channel memory exposes graph and authenticated search without named subgra
         subgraphs: [],
       };
     } else if (request.operation === "semantic_query") {
+      if (request.arguments.sparql?.includes('"query"')) {
+        searchRequests.push({
+          channelId: request.channelId,
+          operation: request.operation,
+        });
+      }
       const graphQuery = request.arguments.sparql?.includes(
         "?subject ?predicate ?object",
       );
@@ -132,6 +142,7 @@ test("channel memory exposes graph and authenticated search without named subgra
   await expect(panel.getByText("Channel Context Graph")).toBeVisible();
   await expect(panel.getByText("Semantic query")).toBeVisible();
   await expect(panel.getByText(/weight 6\/40/i)).toBeVisible();
+  await waitForAnimations(page);
   await panel.screenshot({
     path: "test-results/dkg-memory-beta/panel-overview.png",
   });
@@ -143,6 +154,10 @@ test("channel memory exposes graph and authenticated search without named subgra
     panel.getByText("Use an authenticated relay query proxy"),
   ).toBeVisible();
   await expect(panel.getByText("Query weight 6/40")).toBeVisible();
+  expect(searchRequests).toEqual([
+    { channelId: memoryChannelId, operation: "semantic_query" },
+  ]);
+  await waitForAnimations(page);
   await panel.screenshot({
     path: "test-results/dkg-memory-beta/panel-search.png",
   });
@@ -159,7 +174,7 @@ test("channel memory exposes graph and authenticated search without named subgra
   await expect(
     overlay.getByRole("button", { name: "Contributors" }),
   ).toHaveCount(0);
-  await page.waitForTimeout(700);
+  await waitForAnimations(page);
   await overlay.screenshot({
     path: "test-results/dkg-memory-beta/channel-graph.png",
   });
@@ -359,6 +374,7 @@ test("an agent response shows when its memory is stored", async ({ page }) => {
   await expect(fizzMessage.getByTestId("dkg-message-stored")).toHaveText(
     "Stored in channel memory",
   );
+  await waitForAnimations(page);
   await fizzMessage.screenshot({
     path: "test-results/dkg-memory-beta/message-stored.png",
   });

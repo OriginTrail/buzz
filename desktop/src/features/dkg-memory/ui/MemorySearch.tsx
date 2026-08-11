@@ -2,175 +2,17 @@ import { useState } from "react";
 import { Search, Sparkles } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
-import { fetchSemanticQuery, type SemanticQueryResult } from "../api";
-
-const PREFIXES = `
-PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-PREFIX schema: <http://schema.org/>
-PREFIX decisions: <http://dkg.io/ontology/decisions/>
-PREFIX tasks: <http://dkg.io/ontology/tasks/>
-PREFIX github: <http://dkg.io/ontology/github/>
-`;
-
-const STOP_WORDS = new Set([
-  "a",
-  "about",
-  "all",
-  "and",
-  "are",
-  "did",
-  "do",
-  "find",
-  "for",
-  "from",
-  "has",
-  "have",
-  "in",
-  "is",
-  "it",
-  "me",
-  "of",
-  "on",
-  "our",
-  "show",
-  "that",
-  "the",
-  "this",
-  "to",
-  "was",
-  "what",
-  "when",
-  "where",
-  "which",
-  "who",
-  "with",
-]);
-
-type SearchRow = {
-  entity: string;
-  name: string;
-  description?: string;
-  type?: string;
-  layer: "SWM" | "VM";
-};
-
-function sparqlString(value: string): string {
-  return JSON.stringify(value);
-}
-
-function searchTerms(value: string): string[] {
-  return Array.from(
-    new Set(
-      value
-        .toLowerCase()
-        .match(/[\p{L}\p{N}_.:/#@+-]+/gu)
-        ?.filter((term) => term.length > 1 && !STOP_WORDS.has(term)) ?? [],
-    ),
-  ).slice(0, 5);
-}
-
-function keywordQuery(value: string): string {
-  const terms = searchTerms(value);
-  if (terms.length === 0) {
-    throw new Error("Add a topic, person, decision, file or code symbol.");
-  }
-  const filter = terms
-    .map((term) => {
-      const literal = sparqlString(term);
-      return `(CONTAINS(LCASE(STR(?name)), ${literal}) || CONTAINS(LCASE(COALESCE(STR(?description), "")), ${literal}))`;
-    })
-    .join(" || ");
-  return `${PREFIXES}
-SELECT DISTINCT ?entity ?name ?description ?type WHERE {
-  GRAPH ?g {
-    ?entity schema:name ?name .
-    OPTIONAL { ?entity schema:description ?description }
-    OPTIONAL { ?entity rdf:type ?type }
-    FILTER (${filter})
-  }
-}
-LIMIT 25`;
-}
-
-const SUGGESTIONS = {
-  "Recent decisions": `${PREFIXES}
-SELECT DISTINCT ?entity ?name ?description ?type WHERE {
-  GRAPH ?g {
-    ?entity rdf:type decisions:Decision ; schema:name ?name .
-    OPTIONAL { ?entity schema:description ?description }
-    BIND(decisions:Decision AS ?type)
-  }
-}
-LIMIT 25`,
-  "Open tasks": `${PREFIXES}
-SELECT DISTINCT ?entity ?name ?description ?type WHERE {
-  GRAPH ?g {
-    ?entity rdf:type tasks:Task ; schema:name ?name .
-    OPTIONAL { ?entity schema:description ?description }
-    OPTIONAL { ?entity tasks:status ?status }
-    FILTER (!BOUND(?status) || (!CONTAINS(LCASE(STR(?status)), "done") && !CONTAINS(LCASE(STR(?status)), "complete")))
-    BIND(tasks:Task AS ?type)
-  }
-}
-LIMIT 25`,
-  "People & agents": `${PREFIXES}
-SELECT DISTINCT ?entity ?name ?description ?type WHERE {
-  GRAPH ?g {
-    VALUES ?type { schema:Person github:User }
-    ?entity rdf:type ?type ; schema:name ?name .
-    OPTIONAL { ?entity schema:description ?description }
-  }
-}
-LIMIT 25`,
-} as const;
-
-function bindingValue(value: unknown): string | undefined {
-  if (typeof value === "string") return value;
-  if (value && typeof value === "object" && "value" in value) {
-    const nested = (value as { value?: unknown }).value;
-    return typeof nested === "string" ? nested : undefined;
-  }
-  return undefined;
-}
-
-function displayLiteral(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const match = /^"([\s\S]*)"(?:\^\^<[^>]+>|@[a-z-]+)?$/i.exec(value);
-  return (match?.[1] ?? value).replaceAll('\\"', '"').replaceAll("\\n", "\n");
-}
-
-function compactType(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const clean = value.replace(/^<|>$/g, "");
-  return clean.split(/[/#]/).pop() || clean;
-}
-
-function rowsFrom(result: SemanticQueryResult): SearchRow[] {
-  const rows: SearchRow[] = [];
-  const seen = new Set<string>();
-  for (const layer of result.layers ?? []) {
-    for (const binding of layer.bindings ?? []) {
-      const entity = bindingValue(binding.entity);
-      const name = displayLiteral(bindingValue(binding.name));
-      if (!entity || !name) continue;
-      const key = `${layer.layer}|${entity}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      rows.push({
-        entity,
-        name,
-        description: displayLiteral(bindingValue(binding.description)),
-        type: compactType(bindingValue(binding.type)),
-        layer: layer.layer,
-      });
-    }
-  }
-  return rows;
-}
+import { fetchSemanticQuery } from "../api";
+import {
+  buildMemoryKeywordQuery,
+  MEMORY_SEARCH_SUGGESTIONS,
+  memorySearchRows,
+  type MemorySearchRow,
+} from "../semanticQueries";
 
 export function MemorySearch({ channelId }: { channelId: string }) {
   const [input, setInput] = useState("");
-  const [rows, setRows] = useState<SearchRow[] | null>(null);
+  const [rows, setRows] = useState<MemorySearchRow[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cost, setCost] = useState<string | null>(null);
@@ -181,7 +23,7 @@ export function MemorySearch({ channelId }: { channelId: string }) {
     if (label) setInput(label);
     try {
       const result = await fetchSemanticQuery(channelId, sparql);
-      setRows(rowsFrom(result));
+      setRows(memorySearchRows(result));
       setCost(
         result.cost
           ? `Query weight ${result.cost.score}/${result.cost.budget}`
@@ -199,7 +41,7 @@ export function MemorySearch({ channelId }: { channelId: string }) {
   function submit(event: React.FormEvent) {
     event.preventDefault();
     try {
-      void run(keywordQuery(input));
+      void run(buildMemoryKeywordQuery(input));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Add a search topic.");
     }
@@ -236,7 +78,7 @@ export function MemorySearch({ channelId }: { channelId: string }) {
         </Button>
       </form>
       <div className="flex flex-wrap gap-1.5">
-        {Object.entries(SUGGESTIONS).map(([label, sparql]) => (
+        {Object.entries(MEMORY_SEARCH_SUGGESTIONS).map(([label, sparql]) => (
           <Button
             key={label}
             type="button"

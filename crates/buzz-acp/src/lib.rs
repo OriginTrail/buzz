@@ -2,6 +2,7 @@
 
 mod acp;
 mod config;
+mod dkg_queries;
 mod dkg_recall;
 mod engram_fetch;
 mod filter;

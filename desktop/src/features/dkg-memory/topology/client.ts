@@ -2,6 +2,12 @@
 // selection and authenticated community fallback; render code remains transport
 // agnostic and remote authorization remains channel-scoped.
 import { queryDkgProvider } from "../provider";
+import {
+  buildTopologyEndpointMetadataQuery,
+  CHANNEL_TOPOLOGY_FALLBACK_NODE_QUERY,
+  CHANNEL_TOPOLOGY_RELATION_QUERIES,
+  semanticBindingString,
+} from "../semanticQueries";
 
 export type TopologyTarget =
   | { kind: "channel" }
@@ -53,69 +59,6 @@ type SemanticResult = {
   layers: SemanticLayer[];
 };
 
-const PREFIXES = `
-PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
-PREFIX schema: <http://schema.org/>
-PREFIX prov: <http://www.w3.org/ns/prov#>
-PREFIX memory: <http://dkg.io/ontology/memory/>
-PREFIX decisions: <http://dkg.io/ontology/decisions/>
-PREFIX tasks: <http://dkg.io/ontology/tasks/>
-PREFIX code: <http://dkg.io/ontology/code/>
-PREFIX github: <http://dkg.io/ontology/github/>
-PREFIX software: <http://dkg.io/ontology/software/>
-PREFIX buzz: <https://w3id.org/buzz-dkg/buzz#>
-`;
-
-const FALLBACK_NODE_QUERY = `${PREFIXES}
-SELECT ?subject ?predicate ?object WHERE {
-  GRAPH ?g {
-    VALUES ?predicate { rdf:type schema:name schema:description }
-    ?subject ?predicate ?object .
-  }
-}
-LIMIT 100`;
-
-// Keep containment, domain semantics, and provenance in separate bounded
-// queries. A single VALUES query over a mature channel used to spend all 100
-// rows on prov:wasDerivedFrom, starving memory:contains and domain links and
-// leaving the visualizer with an unrelated slice of node labels.
-const CONTAINMENT_RELATION_QUERY = `${PREFIXES}
-SELECT ?subject ?predicate ?object WHERE {
-  GRAPH ?g {
-    VALUES ?predicate { memory:contains }
-    ?subject ?predicate ?object .
-  }
-}
-LIMIT 40`;
-
-const DOMAIN_RELATION_QUERY = `${PREFIXES}
-SELECT ?subject ?predicate ?object WHERE {
-  GRAPH ?g {
-    VALUES ?predicate {
-      memory:about memory:supports memory:contradicts memory:resolves
-      decisions:affects decisions:recordedIn decisions:implementedBy decisions:supersedes
-      tasks:assignee tasks:relatedDecision tasks:dependsOn tasks:touches
-      code:contains code:definedIn code:calls code:dependsOn
-      github:authoredBy github:reviewedBy github:affects github:inRepo github:containsCommit github:closes
-      software:tests software:executedTest software:supports software:deployedCommit
-    }
-    ?subject ?predicate ?object .
-  }
-}
-LIMIT 60`;
-
-const PROVENANCE_RELATION_QUERY = `${PREFIXES}
-SELECT ?subject ?predicate ?object WHERE {
-  GRAPH ?g {
-    VALUES ?predicate {
-      prov:wasDerivedFrom prov:wasGeneratedBy prov:wasAttributedTo
-      buzz:channel buzz:proposalEvent buzz:inThreadOf
-    }
-    ?subject ?predicate ?object .
-  }
-}
-LIMIT 20`;
-
 const MAX_TOPOLOGY_NODES = 30;
 const MAX_TOPOLOGY_EDGES = 80;
 
@@ -150,22 +93,13 @@ function resourceIri(value: string): string | null {
   return iri;
 }
 
-function bindingString(value: unknown): string | null {
-  if (typeof value === "string") return value;
-  if (value && typeof value === "object" && "value" in value) {
-    const nested = (value as { value?: unknown }).value;
-    return typeof nested === "string" ? nested : null;
-  }
-  return null;
-}
-
 function triplesFrom(result: SemanticResult): TopologyTriple[] {
   const triples: TopologyTriple[] = [];
   for (const layer of result.layers ?? []) {
     for (const binding of layer.bindings ?? []) {
-      const subject = bindingString(binding.subject);
-      const predicate = bindingString(binding.predicate);
-      const object = bindingString(binding.object);
+      const subject = semanticBindingString(binding.subject);
+      const predicate = semanticBindingString(binding.predicate);
+      const object = semanticBindingString(binding.object);
       if (!subject || !predicate || !object) continue;
       triples.push({
         subject,
@@ -215,18 +149,6 @@ function boundedRelationships(triples: TopologyTriple[]): {
   return { relations, endpoints: [...endpoints] };
 }
 
-function endpointMetadataQuery(endpoints: string[]): string {
-  return `${PREFIXES}
-SELECT ?subject ?predicate ?object WHERE {
-  GRAPH ?g {
-    VALUES ?subject { ${endpoints.map((iri) => `<${iri}>`).join(" ")} }
-    VALUES ?predicate { rdf:type schema:name schema:description }
-    ?subject ?predicate ?object .
-  }
-}
-LIMIT 100`;
-}
-
 async function semanticQuery(
   channelId: string,
   sparql: string,
@@ -247,11 +169,7 @@ async function fetchChannelTopologyTriples(
   // Blazegraph also serves the DKG node's mainnet workload. Keep this explicit
   // graph action serialized so opening the panel does not create its own burst,
   // and retain successful slices when one upstream read is transiently busy.
-  for (const sparql of [
-    CONTAINMENT_RELATION_QUERY,
-    DOMAIN_RELATION_QUERY,
-    PROVENANCE_RELATION_QUERY,
-  ]) {
+  for (const sparql of CHANNEL_TOPOLOGY_RELATION_QUERIES) {
     try {
       relationResults.push(await semanticQuery(channelId, sparql));
     } catch (cause) {
@@ -274,8 +192,8 @@ async function fetchChannelTopologyTriples(
     metadata = await semanticQuery(
       channelId,
       endpoints.length > 0
-        ? endpointMetadataQuery(endpoints)
-        : FALLBACK_NODE_QUERY,
+        ? buildTopologyEndpointMetadataQuery(endpoints)
+        : CHANNEL_TOPOLOGY_FALLBACK_NODE_QUERY,
     );
   } catch (cause) {
     if (relations.length === 0) throw cause;

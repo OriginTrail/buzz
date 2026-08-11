@@ -8,133 +8,10 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::time::timeout;
 
+use crate::dkg_queries::{automatic_recall_query, AUTOMATIC_RECALL_ROW_LIMIT};
 use crate::queue::FlushBatch;
 
 const RECALL_TIMEOUT: Duration = Duration::from_millis(2_500);
-const TERM_LIMIT: usize = 2;
-const ROW_LIMIT: usize = 6;
-
-fn is_stop_word(word: &str) -> bool {
-    matches!(
-        word,
-        "about"
-            | "after"
-            | "again"
-            | "also"
-            | "and"
-            | "are"
-            | "can"
-            | "channel"
-            | "check"
-            | "could"
-            | "did"
-            | "does"
-            | "doing"
-            | "for"
-            | "from"
-            | "have"
-            | "help"
-            | "hello"
-            | "hey"
-            | "how"
-            | "into"
-            | "just"
-            | "like"
-            | "make"
-            | "need"
-            | "now"
-            | "okay"
-            | "please"
-            | "should"
-            | "some"
-            | "sure"
-            | "that"
-            | "thank"
-            | "thanks"
-            | "the"
-            | "their"
-            | "then"
-            | "there"
-            | "they"
-            | "this"
-            | "use"
-            | "want"
-            | "what"
-            | "when"
-            | "where"
-            | "which"
-            | "will"
-            | "with"
-            | "would"
-            | "yeah"
-            | "yes"
-            | "you"
-            | "your"
-    )
-}
-
-fn recall_terms(batch: &FlushBatch) -> Vec<String> {
-    let mut terms = Vec::new();
-    let mut seen = HashSet::new();
-    for event in batch
-        .events
-        .iter()
-        .rev()
-        .chain(batch.cancelled_events.iter().rev())
-    {
-        for raw in event.event.content.split(|character: char| {
-            !(character.is_alphanumeric()
-                || matches!(character, '_' | '-' | '.' | '/' | ':' | '#' | '@'))
-        }) {
-            let word = raw
-                .trim_matches(|character: char| matches!(character, '.' | '/' | ':' | '#'))
-                .to_lowercase();
-            if word.len() < 3
-                || word.len() > 80
-                || word.starts_with('@')
-                || word.chars().all(|character| character.is_ascii_digit())
-                || is_stop_word(&word)
-                || !seen.insert(word.clone())
-            {
-                continue;
-            }
-            terms.push(word);
-            if terms.len() == TERM_LIMIT {
-                return terms;
-            }
-        }
-    }
-    terms
-}
-
-fn recall_sparql(terms: &[String]) -> Option<String> {
-    if terms.is_empty() {
-        return None;
-    }
-    let filters = terms
-        .iter()
-        .map(|term| {
-            let literal = serde_json::to_string(term).unwrap_or_else(|_| "\"\"".to_string());
-            format!(
-                "(CONTAINS(LCASE(STR(?name)), {literal}) || CONTAINS(LCASE(COALESCE(STR(?description), \"\")), {literal}))"
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(" || ");
-    Some(format!(
-        "PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>\n\
-         PREFIX schema: <http://schema.org/>\n\
-         SELECT DISTINCT ?entity ?name ?description ?type WHERE {{\n\
-           GRAPH ?g {{\n\
-             ?entity schema:name ?name .\n\
-             OPTIONAL {{ ?entity schema:description ?description . }}\n\
-             OPTIONAL {{ ?entity rdf:type ?type . }}\n\
-             FILTER({filters})\n\
-           }}\n\
-         }}\n\
-         LIMIT {ROW_LIMIT}"
-    ))
-}
 
 fn binding_string(binding: &Value, key: &str) -> Option<String> {
     let value = binding.get(key)?;
@@ -185,11 +62,11 @@ fn render_recall(response: &Value) -> Option<String> {
                 line.push(')');
             }
             records.push(line);
-            if records.len() == ROW_LIMIT {
+            if records.len() == AUTOMATIC_RECALL_ROW_LIMIT {
                 break;
             }
         }
-        if records.len() == ROW_LIMIT {
+        if records.len() == AUTOMATIC_RECALL_ROW_LIMIT {
             break;
         }
     }
@@ -245,21 +122,14 @@ where
     if !enabled {
         return None;
     }
-    let terms = recall_terms(batch);
-    let sparql = recall_sparql(&terms)?;
-    let request = serde_json::json!({
-        "channelId": batch.channel_id.to_string(),
-        "operation": "semantic_query",
-        "scope": { "type": "current_channel" },
-        "arguments": { "sparql": sparql, "view": "shared" }
-    });
-    match timeout(timeout_after, query(request)).await {
+    let recall = automatic_recall_query(batch)?;
+    match timeout(timeout_after, query(recall.request)).await {
         Ok(Ok(response)) => {
             let rendered = render_recall(&response);
             tracing::info!(
                 target: "dkg::recall",
                 channel = %batch.channel_id,
-                terms = ?terms,
+                terms = ?recall.terms,
                 found = rendered.is_some(),
                 "automatic channel-memory recall completed"
             );
@@ -312,20 +182,6 @@ mod tests {
             cancelled_events: vec![],
             cancel_reason: None,
         }
-    }
-
-    #[test]
-    fn query_is_bounded_to_meaningful_terms() {
-        let batch = batch(
-            "@Fizz please check the x402 payment decision and verifyToken implementation now",
-        );
-        let terms = recall_terms(&batch);
-        assert_eq!(terms, vec!["x402", "payment"]);
-        let query = recall_sparql(&terms).expect("query");
-        assert!(query.contains("schema:name"));
-        assert!(query.contains("\"x402\""));
-        assert!(query.ends_with("LIMIT 6"));
-        assert!(!query.contains(&batch.channel_id.to_string()));
     }
 
     #[tokio::test]
