@@ -1443,9 +1443,9 @@ fn send_prompt_result(
     });
 }
 
-const DKG_RECALL_TIMEOUT: Duration = Duration::from_secs(4);
-const DKG_RECALL_TERM_LIMIT: usize = 5;
-const DKG_RECALL_ROW_LIMIT: usize = 8;
+const DKG_RECALL_TIMEOUT: Duration = Duration::from_millis(2_500);
+const DKG_RECALL_TERM_LIMIT: usize = 2;
+const DKG_RECALL_ROW_LIMIT: usize = 6;
 
 fn is_dkg_recall_stop_word(word: &str) -> bool {
     matches!(
@@ -1647,7 +1647,7 @@ async fn fetch_relevant_dkg_memory(batch: &FlushBatch, rest_client: &RestClient)
         "channelId": batch.channel_id.to_string(),
         "operation": "semantic_query",
         "scope": { "type": "current_channel" },
-        "arguments": { "sparql": sparql, "view": "both" }
+        "arguments": { "sparql": sparql, "view": "shared" }
     });
     match timeout(DKG_RECALL_TIMEOUT, rest_client.query_dkg(&request)).await {
         Ok(Ok(response)) => {
@@ -4554,23 +4554,14 @@ mod tests {
             cancel_reason: None,
         };
         let terms = dkg_recall_terms(&batch);
-        assert_eq!(
-            terms,
-            vec![
-                "x402",
-                "payment",
-                "decision",
-                "verifytoken",
-                "implementation"
-            ]
-        );
+        assert_eq!(terms, vec!["x402", "payment"]);
         assert_eq!(terms.len(), DKG_RECALL_TERM_LIMIT);
 
         let query = dkg_recall_sparql(&terms).expect("query");
         assert!(query.contains("schema:name"));
         assert!(query.contains("\"x402\""));
         assert!(!query.contains("VALUES"));
-        assert!(query.ends_with("LIMIT 8"));
+        assert!(query.ends_with("LIMIT 6"));
         assert!(!query.contains(&batch.channel_id.to_string()));
     }
 
