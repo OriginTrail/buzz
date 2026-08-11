@@ -184,6 +184,7 @@ test("channel memory exposes graph and authenticated search without named subgra
         subject: request.arguments.pubkey,
         perspective: "cafebabe".repeat(8),
         context: "channel",
+        completeness: "complete",
         score: 74,
         confidence: "high",
         breakdown: {

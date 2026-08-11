@@ -411,9 +411,12 @@ function ReputationCard({
               /100
             </span>
           </div>
-          <Badge className="mt-1" variant={confidenceVariant}>
-            {data.confidence} confidence
-          </Badge>
+          <div className="mt-1 flex justify-end gap-1">
+            <Badge variant={confidenceVariant}>{data.confidence} confidence</Badge>
+            {data.completeness === "partial" ? (
+              <Badge variant="warning">bounded sample</Badge>
+            ) : null}
+          </div>
         </div>
       </div>
 

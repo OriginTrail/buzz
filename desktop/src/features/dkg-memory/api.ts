@@ -126,7 +126,7 @@ export interface TrustVouch {
 export interface TrustNetwork {
   gate: MemoryGate;
   cg?: string;
-  completeness: "complete";
+  completeness: "complete" | "partial";
   people: TrustPerson[];
   vouches: TrustVouch[];
 }
@@ -137,6 +137,7 @@ export interface ReputationSummary {
   subject: string;
   perspective: string;
   context: "channel";
+  completeness: "complete" | "partial";
   score: number;
   confidence: "none" | "low" | "medium" | "high";
   breakdown: {

@@ -470,6 +470,7 @@ test("reputation uses a fixed subject query and returns an explainable bounded s
           subject: "b".repeat(64),
           perspective: "a".repeat(64),
           context: "channel",
+          completeness: "complete",
           score: 74,
           confidence: "high",
           breakdown: {
