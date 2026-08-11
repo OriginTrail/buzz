@@ -23,7 +23,7 @@ import {
 } from "../hooks";
 import { enableChannelMemory, explorerSource, nodeUiDeepLink } from "../api";
 import { DkgProviderError } from "../provider";
-import { CHANNEL_GRAPH_SCOPE } from "../topology/client";
+import type { TopologyTarget } from "../topology/client";
 import { DkgDiagnostics } from "./DkgDiagnostics";
 import { EvidenceCard } from "./EvidenceCard";
 import { GraphOverlay } from "./GraphOverlay";
@@ -63,7 +63,7 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
   const memory = useChannelMemory(channelId, receiptCg, !cgQuery.isLoading);
   const cg = memory.data?.cg ?? receiptCg;
   const [trailPubkey, setTrailPubkey] = useState<string | null>(null);
-  const [graphSubgraph, setGraphSubgraph] = useState<string | null>(null);
+  const [graphTarget, setGraphTarget] = useState<TopologyTarget | null>(null);
   const [enabling, setEnabling] = useState(false);
   const [enableError, setEnableError] = useState<string | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
@@ -276,7 +276,7 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
 
       <button
         type="button"
-        onClick={() => setGraphSubgraph(CHANNEL_GRAPH_SCOPE)}
+        onClick={() => setGraphTarget({ kind: "channel" })}
         className="group mb-4 w-full rounded-xl border border-primary/25 bg-gradient-to-br from-primary/12 via-primary/5 to-transparent p-3 text-left transition hover:border-primary/50 hover:from-primary/16"
         data-testid="dkg-channel-graph"
       >
@@ -363,7 +363,12 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
                       type="button"
                       variant="outline"
                       size="xs"
-                      onClick={() => setGraphSubgraph(subgraph.name)}
+                      onClick={() =>
+                        setGraphTarget({
+                          kind: "subgraph",
+                          name: subgraph.name,
+                        })
+                      }
                       title={`${subgraph.entityCount} entities · ${subgraph.tripleCount} triples`}
                       data-testid={`dkg-subgraph-${subgraph.name}`}
                     >
@@ -448,12 +453,12 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
         </TabsContent>
       </Tabs>
 
-      {graphSubgraph && (
+      {graphTarget && (
         <GraphOverlay
           channelId={channelId}
           cg={cg}
-          subgraph={graphSubgraph}
-          onClose={() => setGraphSubgraph(null)}
+          target={graphTarget}
+          onClose={() => setGraphTarget(null)}
         />
       )}
     </PanelShell>

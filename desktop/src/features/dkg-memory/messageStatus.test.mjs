@@ -42,6 +42,21 @@ test("message memory status requires explicit stored confirmation", () => {
     memoryStatusForMessage([tool({ result: "accepted" })], CHANNEL, MESSAGE),
     "failed",
   );
+  assert.equal(
+    memoryStatusForMessage(
+      [
+        tool({
+          result: JSON.stringify({
+            stdout: JSON.stringify({ state: "receipted" }),
+            stderr: "",
+          }),
+        }),
+      ],
+      CHANNEL,
+      MESSAGE,
+    ),
+    "stored",
+  );
 });
 
 test("message memory status exposes failed proposals and in-flight recording", () => {
@@ -97,5 +112,47 @@ test("published response is recording until its turn finishes without a proposal
   assert.equal(
     memoryStatusForMessage([publish], CHANNEL, MESSAGE, new Set(["turn-one"])),
     "failed",
+  );
+});
+
+test("display text and unrelated result IDs cannot impersonate structured telemetry", () => {
+  const unrelated = "b".repeat(64);
+  assert.equal(
+    memoryStatusForMessage(
+      [
+        tool({
+          title: `buzz memory propose --source ${MESSAGE}`,
+          args: { command: `echo ${MESSAGE}` },
+          result: `stored ${MESSAGE}`,
+        }),
+      ],
+      CHANNEL,
+      MESSAGE,
+    ),
+    null,
+  );
+  assert.equal(
+    memoryStatusForMessage(
+      [
+        tool({
+          args: { command: `buzz memory propose --source ${unrelated}` },
+        }),
+      ],
+      CHANNEL,
+      MESSAGE,
+    ),
+    null,
+  );
+  assert.equal(
+    memoryStatusForMessage(
+      [
+        tool({
+          args: { command: 'buzz memory propose --source "mock-event-id"' },
+        }),
+      ],
+      CHANNEL,
+      "mock-event-id",
+    ),
+    "stored",
   );
 });

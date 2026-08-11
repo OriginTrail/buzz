@@ -13,7 +13,7 @@
 // not verification).
 import { Suspense, lazy, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { CHANNEL_GRAPH_SCOPE, fetchTopologyTriples } from "./client";
+import { fetchTopologyTriples, type TopologyTarget } from "./client";
 import {
   applyHeaviestSubjectsCap,
   attributionLegend,
@@ -75,21 +75,28 @@ const NODE_UI_GRAPH_OPTIONS = {
 export function TopologyView({
   channelId,
   cg,
-  subgraph,
+  target,
   onSelectUri,
 }: {
   channelId: string;
   cg: string | null;
-  subgraph: string;
+  target: TopologyTarget;
   onSelectUri: (uri: string, label?: string) => void;
 }) {
   const [colorMode, setColorMode] = useState<"entity" | "attribution">(
     "entity",
   );
-  const channelWide = subgraph === CHANNEL_GRAPH_SCOPE;
+  const channelWide = target.kind === "channel";
   const query = useQuery({
-    queryKey: ["dkg-memory", "topology", channelId, cg, subgraph],
-    queryFn: () => fetchTopologyTriples(channelId, cg, subgraph),
+    queryKey: [
+      "dkg-memory",
+      "topology",
+      channelId,
+      cg,
+      target.kind,
+      target.kind === "subgraph" ? target.name : null,
+    ],
+    queryFn: () => fetchTopologyTriples(channelId, cg, target),
     staleTime: 30 * 1000,
   });
 

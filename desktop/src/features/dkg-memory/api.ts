@@ -6,7 +6,11 @@
 // authorization input.
 import { relayClient } from "@/shared/api/relayClient";
 import { getRelayHttpUrl, signRelayEvent } from "@/shared/api/tauri";
-import { queryDkgProvider } from "./provider";
+import { postAuthenticatedDkgJson, queryDkgProvider } from "./provider";
+import {
+  memoryProposalProgress,
+  normalizedMemoryProposalState,
+} from "./proposalState";
 
 export {
   explorerSource,
@@ -271,16 +275,6 @@ export async function runDkgDiagnostics(
   };
 }
 
-async function sha256Hex(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(text),
-  );
-  return Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
 /**
  * Deliberately start channel memory from a user action. The visible channel
  * message is the proposal's provenance, while the existing integration lazily
@@ -293,21 +287,20 @@ export async function enableChannelMemory(channelId: string): Promise<{
 }> {
   const source = await relayClient.sendMessage(
     channelId,
-    "🧠 DKG memory was enabled for this channel.",
+    "🧠 DKG memory setup requested for this channel.",
   );
   const proposal = await signRelayEvent({
     kind: 40009,
     content: JSON.stringify({
       schemaVersion: 2,
       profiles: ["dkg-memory@1"],
-      summary: "DKG memory was enabled for this Buzz channel.",
+      summary: "Request DKG memory setup for this Buzz channel.",
       entities: [
         {
           id: "channel-memory",
           type: "memory:Entity",
           name: "Channel DKG memory",
-          description:
-            "DKG-backed semantic memory was enabled for this Buzz channel.",
+          description: "DKG-backed semantic memory requested for this channel.",
         },
       ],
       relations: [],
@@ -320,15 +313,13 @@ export async function enableChannelMemory(channelId: string): Promise<{
       ["e", source.id, "", "source"],
     ],
   });
-  const relayHttpOrigin = (await getRelayHttpUrl()).replace(/\/+$/, "");
-  const url = `${relayHttpOrigin}/api/dkg/memory`;
   const body = JSON.stringify(proposal);
-  const payloadHash = await sha256Hex(body);
   const deadline = Date.now() + 120_000;
   let result: MemoryProvisioningResponse | null = null;
   do {
-    result = await postMemoryProposal(url, body, payloadHash);
-    if (isMemoryStored(result.state) || !isMemoryProcessing(result.state)) {
+    result = await postMemoryProposal(body);
+    const progress = memoryProposalProgress(result.state);
+    if (progress !== "processing") {
       return {
         ...result,
         cg: result.cg ?? result.contextGraphId,
@@ -351,73 +342,19 @@ interface MemoryProvisioningResponse {
   error?: unknown;
 }
 
-function isMemoryStored(state: string | undefined): boolean {
-  return state === "stored" || state === "receipted";
-}
-
-function isMemoryProcessing(state: string | undefined): boolean {
-  return (
-    state === "processing" ||
-    state === "distilled" ||
-    state === "wm_written" ||
-    state === "finalized" ||
-    state === "shared"
-  );
-}
-
 async function postMemoryProposal(
-  url: string,
   body: string,
-  payloadHash: string,
 ): Promise<MemoryProvisioningResponse> {
-  const authEvent = await signRelayEvent({
-    kind: 27235,
-    content: "",
-    tags: [
-      ["u", url],
-      ["method", "POST"],
-      ["payload", payloadHash],
-      ["nonce", crypto.randomUUID()],
-    ],
-  });
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Nostr ${btoa(JSON.stringify(authEvent))}`,
-      "Content-Type": "application/json",
-    },
-    body,
-    signal: AbortSignal.timeout(25_000),
-  });
-  const result = (await response
-    .json()
-    .catch(() => null)) as MemoryProvisioningResponse | null;
-  if (!response.ok) {
-    const structured =
-      result?.error &&
-      typeof result.error === "object" &&
-      "message" in result.error &&
-      typeof (result.error as { message?: unknown }).message === "string"
-        ? (result.error as { message: string }).message
-        : null;
-    const message =
-      typeof result?.error === "string"
-        ? result.error
-        : structured
-          ? structured
-          : "Could not start DKG memory for this channel.";
-    throw new Error(message);
-  }
+  const { result, status } =
+    await postAuthenticatedDkgJson<MemoryProvisioningResponse>({
+      path: "/api/dkg/memory",
+      body,
+    });
   return {
-    ...(result ?? {}),
+    ...result,
     state:
-      result?.state ??
-      (response.status === 202
-        ? "processing"
-        : response.status === 200
-          ? "stored"
-          : undefined),
+      normalizedMemoryProposalState(result.state) ??
+      (status === 202 ? "processing" : status === 200 ? "stored" : undefined),
   };
 }
 

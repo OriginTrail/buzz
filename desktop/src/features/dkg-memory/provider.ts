@@ -55,6 +55,12 @@ type CommunityGatewayEnvelope = {
   result: unknown;
 };
 
+type AuthenticatedDkgPost = {
+  path: `/api/dkg/${string}`;
+  body: string;
+  timeoutMs?: number;
+};
+
 export class DkgProviderError extends Error {
   status: number;
   code?: string;
@@ -130,6 +136,73 @@ async function sha256Hex(text: string): Promise<string> {
     .join("");
 }
 
+function dkgErrorMessage(
+  payload: unknown,
+  fallback: string,
+): {
+  message: string;
+  code?: string;
+  details?: unknown;
+} {
+  if (!isRecord(payload)) return { message: fallback };
+  const error = payload.error;
+  if (typeof error === "string") return { message: error };
+  if (!isRecord(error)) return { message: fallback };
+  return {
+    message: typeof error.message === "string" ? error.message : fallback,
+    code: typeof error.code === "string" ? error.code : undefined,
+    details: error.details,
+  };
+}
+
+/**
+ * Shared authenticated JSON boundary for Buzz's channel-scoped DKG routes.
+ * Every caller signs the exact serialized body and receives the same
+ * structured error handling; feature modules only compose their payloads.
+ */
+export async function postAuthenticatedDkgJson<Result>({
+  path,
+  body,
+  timeoutMs = QUERY_TIMEOUT_MS,
+}: AuthenticatedDkgPost): Promise<{ result: Result; status: number }> {
+  const relayHttpOrigin = (await getRelayHttpUrl()).replace(/\/+$/, "");
+  const url = `${relayHttpOrigin}${path}`;
+  const authEvent = await signRelayEvent({
+    kind: NIP98_KIND,
+    content: "",
+    tags: [
+      ["u", url],
+      ["method", "POST"],
+      ["payload", await sha256Hex(body)],
+      ["nonce", crypto.randomUUID()],
+    ],
+  });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Nostr ${btoa(JSON.stringify(authEvent))}`,
+      "Content-Type": "application/json",
+    },
+    body,
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const payload = (await response.json().catch(() => null)) as Result | null;
+  if (!response.ok) {
+    const error = dkgErrorMessage(
+      payload,
+      `community DKG request failed (${response.status})`,
+    );
+    throw new DkgProviderError(
+      error.message,
+      response.status,
+      error.code,
+      error.details,
+    );
+  }
+  return { result: (payload ?? {}) as Result, status: response.status };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -198,8 +271,6 @@ async function communityGatewayQuery<
   Result,
   Operation extends DkgQueryOperation,
 >(query: ProviderQuery<Operation>): Promise<Result> {
-  const relayHttpOrigin = (await getRelayHttpUrl()).replace(/\/+$/, "");
-  const url = `${relayHttpOrigin}/api/dkg/query`;
   const body = JSON.stringify({
     channelId: query.channelId,
     operation: query.operation,
@@ -208,45 +279,11 @@ async function communityGatewayQuery<
       : {}),
     arguments: query.arguments,
   });
-  const authEvent = await signRelayEvent({
-    kind: NIP98_KIND,
-    content: "",
-    tags: [
-      ["u", url],
-      ["method", "POST"],
-      ["payload", await sha256Hex(body)],
-      ["nonce", crypto.randomUUID()],
-    ],
-  });
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      Authorization: `Nostr ${btoa(JSON.stringify(authEvent))}`,
-      "Content-Type": "application/json",
-    },
+  const { result } = await postAuthenticatedDkgJson<unknown>({
+    path: "/api/dkg/query",
     body,
-    signal: AbortSignal.timeout(QUERY_TIMEOUT_MS),
   });
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as {
-      error?: unknown;
-    } | null;
-    const error = payload?.error;
-    const message =
-      typeof error === "string"
-        ? error
-        : isRecord(error) && typeof error.message === "string"
-          ? error.message
-          : `community DKG query failed (${response.status})`;
-    const code =
-      isRecord(error) && typeof error.code === "string"
-        ? error.code
-        : undefined;
-    const details = isRecord(error) ? error.details : undefined;
-    throw new DkgProviderError(message, response.status, code, details);
-  }
-  const envelope = validateEnvelope(await response.json(), query);
+  const envelope = validateEnvelope(result, query);
   return adaptCommunityResult(envelope) as Result;
 }
 

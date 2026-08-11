@@ -1,6 +1,7 @@
 //! Agent-native DKG memory proposals.
 
 use std::collections::HashSet;
+use std::future::Future;
 use std::time::{Duration, Instant};
 
 use nostr::{EventBuilder, Kind, Tag};
@@ -14,6 +15,54 @@ const KIND_DKG_MEMORY_PROPOSAL: u16 = 40009;
 const MAX_SOURCES: usize = 16;
 const MAX_SPARQL_BYTES: usize = 8 * 1024;
 const PROPOSAL_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+#[derive(Debug, PartialEq, Eq)]
+struct ProposalPollOutcome {
+    response: String,
+    refresh_error: Option<String>,
+}
+
+async fn poll_proposal_response<Refresh, RefreshFuture, Sleep, SleepFuture, Now>(
+    mut response: String,
+    wait: Duration,
+    poll_interval: Duration,
+    mut refresh: Refresh,
+    mut sleep: Sleep,
+    mut now: Now,
+) -> Result<ProposalPollOutcome, CliError>
+where
+    Refresh: FnMut() -> RefreshFuture,
+    RefreshFuture: Future<Output = Result<String, CliError>>,
+    Sleep: FnMut(Duration) -> SleepFuture,
+    SleepFuture: Future<Output = ()>,
+    Now: FnMut() -> Instant,
+{
+    let deadline = now() + wait;
+    loop {
+        let (normalized, progress) = normalize_proposal_response(&response)?;
+        response = normalized;
+        match progress {
+            ProposalProgress::Stored | ProposalProgress::Unknown => break,
+            ProposalProgress::Processing if wait.is_zero() || now() >= deadline => break,
+            ProposalProgress::Processing => {
+                sleep(poll_interval).await;
+                match refresh().await {
+                    Ok(next) => response = next,
+                    Err(error) => {
+                        return Ok(ProposalPollOutcome {
+                            response,
+                            refresh_error: Some(error.to_string()),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(ProposalPollOutcome {
+        response,
+        refresh_error: None,
+    })
+}
 
 fn bounded_json_string<'a>(
     object: &'a serde_json::Map<String, serde_json::Value>,
@@ -311,30 +360,22 @@ async fn propose(
     )?;
     let value = serde_json::to_value(event)
         .map_err(|error| CliError::Other(format!("proposal serialization failed: {error}")))?;
-    let mut response = client.post_authed_json("/api/dkg/memory", &value).await?;
-    let wait = Duration::from_secs(wait_seconds);
-    let deadline = Instant::now() + wait;
-    loop {
-        let (normalized, progress) = normalize_proposal_response(&response)?;
-        response = normalized;
-        match progress {
-            ProposalProgress::Stored | ProposalProgress::Unknown => break,
-            ProposalProgress::Processing if wait.is_zero() || Instant::now() >= deadline => break,
-            ProposalProgress::Processing => {
-                tokio::time::sleep(PROPOSAL_POLL_INTERVAL).await;
-                match client.post_authed_json("/api/dkg/memory", &value).await {
-                    Ok(next) => response = next,
-                    Err(error) => {
-                        eprintln!(
-                            "memory proposal was accepted, but its completion status could not be refreshed: {error}"
-                        );
-                        break;
-                    }
-                }
-            }
-        }
+    let response = client.post_authed_json("/api/dkg/memory", &value).await?;
+    let outcome = poll_proposal_response(
+        response,
+        Duration::from_secs(wait_seconds),
+        PROPOSAL_POLL_INTERVAL,
+        || client.post_authed_json("/api/dkg/memory", &value),
+        tokio::time::sleep,
+        Instant::now,
+    )
+    .await?;
+    if let Some(error) = outcome.refresh_error {
+        eprintln!(
+            "memory proposal was accepted, but its completion status could not be refreshed: {error}"
+        );
     }
-    println!("{response}");
+    println!("{}", outcome.response);
     Ok(())
 }
 
@@ -379,7 +420,51 @@ fn normalize_proposal_response(response: &str) -> Result<(String, ProposalProgre
 
 #[cfg(test)]
 mod tests {
+    use std::cell::{Cell, RefCell};
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
     use super::*;
+
+    async fn test_poll(
+        initial: &str,
+        refreshes: Vec<Result<&'static str, &'static str>>,
+        wait: Duration,
+        interval: Duration,
+    ) -> (ProposalPollOutcome, usize) {
+        let queue = Rc::new(RefCell::new(VecDeque::from(refreshes)));
+        let calls = Rc::new(Cell::new(0));
+        let elapsed = Rc::new(Cell::new(Duration::ZERO));
+        let base = Instant::now();
+        let refresh_queue = queue.clone();
+        let refresh_calls = calls.clone();
+        let sleep_elapsed = elapsed.clone();
+        let now_elapsed = elapsed.clone();
+        let outcome = poll_proposal_response(
+            initial.to_string(),
+            wait,
+            interval,
+            move || {
+                refresh_calls.set(refresh_calls.get() + 1);
+                let result = refresh_queue
+                    .borrow_mut()
+                    .pop_front()
+                    .expect("refresh response");
+                std::future::ready(match result {
+                    Ok(value) => Ok(value.to_string()),
+                    Err(error) => Err(CliError::Other(error.to_string())),
+                })
+            },
+            move |duration| {
+                sleep_elapsed.set(sleep_elapsed.get() + duration);
+                std::future::ready(())
+            },
+            move || base + now_elapsed.get(),
+        )
+        .await
+        .expect("poll result");
+        (outcome, calls.get())
+    }
 
     #[test]
     fn proposal_content_requires_version_summary_and_items() {
@@ -432,6 +517,58 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&stored).unwrap()["state"],
             "stored"
+        );
+    }
+
+    #[tokio::test]
+    async fn proposal_polling_observes_the_cli_wait_contract() {
+        let (stored, refreshes) = test_poll(
+            r#"{"state":"distilled"}"#,
+            vec![Ok(r#"{"state":"receipted"}"#)],
+            Duration::from_secs(5),
+            Duration::from_secs(2),
+        )
+        .await;
+        assert_eq!(refreshes + 1, 2, "initial post plus one refresh");
+        assert_eq!(stored.response, r#"{"state":"stored"}"#);
+        assert!(stored.refresh_error.is_none());
+
+        let (immediate, refreshes) = test_poll(
+            r#"{"state":"distilled"}"#,
+            vec![],
+            Duration::ZERO,
+            Duration::from_secs(2),
+        )
+        .await;
+        assert_eq!(refreshes, 0);
+        assert_eq!(immediate.response, r#"{"state":"processing"}"#);
+
+        let (timed_out, refreshes) = test_poll(
+            r#"{"state":"processing"}"#,
+            vec![
+                Ok(r#"{"state":"processing"}"#),
+                Ok(r#"{"state":"processing"}"#),
+                Ok(r#"{"state":"processing"}"#),
+            ],
+            Duration::from_secs(5),
+            Duration::from_secs(2),
+        )
+        .await;
+        assert_eq!(refreshes, 3);
+        assert_eq!(timed_out.response, r#"{"state":"processing"}"#);
+
+        let (refresh_failed, refreshes) = test_poll(
+            r#"{"state":"processing"}"#,
+            vec![Err("gateway unavailable")],
+            Duration::from_secs(5),
+            Duration::from_secs(2),
+        )
+        .await;
+        assert_eq!(refreshes, 1);
+        assert_eq!(refresh_failed.response, r#"{"state":"processing"}"#);
+        assert_eq!(
+            refresh_failed.refresh_error.as_deref(),
+            Some("gateway unavailable")
         );
     }
 

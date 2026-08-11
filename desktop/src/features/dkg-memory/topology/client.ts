@@ -3,7 +3,9 @@
 // agnostic and remote authorization remains channel-scoped.
 import { queryDkgProvider } from "../provider";
 
-export const CHANNEL_GRAPH_SCOPE = "__channel__";
+export type TopologyTarget =
+  | { kind: "channel" }
+  | { kind: "subgraph"; name: string };
 
 export interface TopologyTriple {
   subject: string;
@@ -25,17 +27,17 @@ export interface TopologyData {
 export async function fetchTopologyTriples(
   channelId: string,
   cg: string | null,
-  name: string,
+  target: TopologyTarget,
 ): Promise<TopologyData> {
-  if (name === CHANNEL_GRAPH_SCOPE) {
+  if (target.kind === "channel") {
     return fetchChannelTopologyTriples(channelId);
   }
   return queryDkgProvider<TopologyData, "subgraph_triples">({
     channelId,
     operation: "subgraph_triples",
-    arguments: { name },
+    arguments: { name: target.name },
     localPath: cg
-      ? `/api/subgraph-triples?cg=${encodeURIComponent(cg)}&name=${encodeURIComponent(name)}`
+      ? `/api/subgraph-triples?cg=${encodeURIComponent(cg)}&name=${encodeURIComponent(target.name)}`
       : null,
   });
 }
@@ -289,7 +291,6 @@ async function fetchChannelTopologyTriples(
     cg:
       metadata?.cg ??
       relationResults.find((result) => typeof result.cg === "string")?.cg,
-    subgraph: CHANNEL_GRAPH_SCOPE,
     triples,
   };
 }

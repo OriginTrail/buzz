@@ -254,6 +254,46 @@ test("a channel member can provision memory from the panel with visible provenan
   });
 });
 
+test("failed provisioning leaves a request, never a false enabled claim", async ({
+  page,
+}) => {
+  await page.route("**/api/dkg/query", (route) =>
+    route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: false,
+        error: {
+          code: "unknown_channel",
+          message: "channel is not configured for DKG queries",
+        },
+      }),
+    }),
+  );
+  await page.route("**/api/dkg/memory", (route) =>
+    route.fulfill({
+      status: 403,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "DKG provisioning is not authorized" }),
+    }),
+  );
+
+  await installMockBridge(page);
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await page.getByTestId("channel-engineering").click();
+  await page.getByTestId("dkg-memory-toggle").click();
+  const panel = page.getByTestId("dkg-memory-panel");
+  await panel.getByTestId("dkg-memory-enable").click();
+
+  await expect(
+    panel.getByText("DKG provisioning is not authorized"),
+  ).toBeVisible();
+  await expect(
+    page.getByText("🧠 DKG memory setup requested for this channel."),
+  ).toBeVisible();
+  await expect(page.getByText(/DKG memory was enabled/i)).toHaveCount(0);
+});
+
 test("an agent response shows when its memory is stored", async ({ page }) => {
   await installMockBridge(page, {
     managedAgents: [

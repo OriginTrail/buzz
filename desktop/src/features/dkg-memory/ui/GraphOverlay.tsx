@@ -8,7 +8,7 @@ import { createPortal } from "react-dom";
 import { explorerSource } from "../api";
 import { useSubgraphGraph } from "../hooks";
 import { TopologyView } from "../topology/TopologyView";
-import { CHANNEL_GRAPH_SCOPE } from "../topology/client";
+import type { TopologyTarget } from "../topology/client";
 import { GraphCanvas, type GraphSelection } from "./GraphCanvas";
 import { NodeUiResolve } from "./NodeUiResolve";
 
@@ -27,16 +27,17 @@ const LAYER_META = {
 export function GraphOverlay({
   channelId,
   cg,
-  subgraph,
+  target,
   onClose,
 }: {
   channelId: string;
   cg: string | null;
-  subgraph: string;
+  target: TopologyTarget;
   onClose: () => void;
 }) {
-  const channelWide = subgraph === CHANNEL_GRAPH_SCOPE;
-  const graph = useSubgraphGraph(channelId, cg, channelWide ? null : subgraph);
+  const channelWide = target.kind === "channel";
+  const subgraph = target.kind === "subgraph" ? target.name : null;
+  const graph = useSubgraphGraph(channelId, cg, subgraph);
   const [selection, setSelection] = useState<GraphSelection | null>(null);
   // Spine is the first paint; topology (hexagonal RdfGraph) mounts only on
   // this explicit scoped action — per the repurpose wrap's acceptance gate.
@@ -166,7 +167,7 @@ export function GraphOverlay({
             <TopologyView
               channelId={channelId}
               cg={cg}
-              subgraph={subgraph}
+              target={target}
               onSelectUri={(uri, label) => {
                 const known = nodes.find((n) => n.id === uri);
                 if (known) {

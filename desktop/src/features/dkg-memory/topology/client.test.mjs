@@ -45,7 +45,7 @@ test("topology falls back to the authenticated channel-scoped gateway operation"
     const result = await fetchTopologyTriples(
       "550e8400-e29b-41d4-a716-446655440000",
       "receipt-cg",
-      "decisions",
+      { kind: "subgraph", name: "decisions" },
     );
     assert.equal(result.gate, "ok");
     assert.equal(result.cg, "server-cg");
@@ -154,7 +154,7 @@ test("channel topology fetches labels for bounded relationship endpoints", async
     const result = await fetchTopologyTriples(
       "550e8400-e29b-41d4-a716-446655440000",
       null,
-      "__channel__",
+      { kind: "channel" },
     );
     assert.equal(result.gate, "ok");
     assert.equal(result.cg, "server-cg");
