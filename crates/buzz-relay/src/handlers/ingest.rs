@@ -21,18 +21,19 @@ use buzz_core::kind::{
     KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN,
     KIND_HUDDLE_ENDED, KIND_HUDDLE_GUIDELINES, KIND_HUDDLE_PARTICIPANT_JOINED,
     KIND_HUDDLE_PARTICIPANT_LEFT, KIND_HUDDLE_STARTED, KIND_IA_ARCHIVE_REQUEST,
-    KIND_IA_UNARCHIVE_REQUEST, KIND_LONG_FORM, KIND_MANAGED_AGENT, KIND_MEMBER_ADDED_NOTIFICATION,
-    KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MODERATION_BAN, KIND_MODERATION_RESOLVE_REPORT,
-    KIND_MODERATION_TIMEOUT, KIND_MODERATION_UNBAN, KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST,
-    KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT, KIND_NIP29_DELETE_GROUP,
-    KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST, KIND_NIP29_LEAVE_REQUEST,
-    KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER, KIND_NIP43_LEAVE_REQUEST,
-    KIND_NIP65_RELAY_LIST_METADATA, KIND_PERSONA, KIND_PIN_LIST, KIND_PRESENCE_UPDATE,
-    KIND_PRIVATE_MANAGED_AGENT, KIND_PRODUCT_FEEDBACK, KIND_PROFILE, KIND_PROJECT, KIND_REACTION,
-    KIND_READ_STATE, KIND_REPORT, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_BOOKMARKED,
-    KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT, KIND_STREAM_MESSAGE_PINNED,
-    KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEAM,
-    KIND_TEAM_CATALOG, KIND_TEXT_NOTE, KIND_USER_STATUS, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
+    KIND_IA_UNARCHIVE_REQUEST, KIND_LABEL, KIND_LONG_FORM, KIND_MANAGED_AGENT,
+    KIND_MEMBER_ADDED_NOTIFICATION, KIND_MEMBER_REMOVED_NOTIFICATION, KIND_MODERATION_BAN,
+    KIND_MODERATION_RESOLVE_REPORT, KIND_MODERATION_TIMEOUT, KIND_MODERATION_UNBAN,
+    KIND_MODERATION_UNTIMEOUT, KIND_MUTE_LIST, KIND_NIP29_CREATE_GROUP, KIND_NIP29_DELETE_EVENT,
+    KIND_NIP29_DELETE_GROUP, KIND_NIP29_EDIT_METADATA, KIND_NIP29_JOIN_REQUEST,
+    KIND_NIP29_LEAVE_REQUEST, KIND_NIP29_PUT_USER, KIND_NIP29_REMOVE_USER,
+    KIND_NIP43_LEAVE_REQUEST, KIND_NIP65_RELAY_LIST_METADATA, KIND_PERSONA, KIND_PIN_LIST,
+    KIND_PRESENCE_UPDATE, KIND_PRIVATE_MANAGED_AGENT, KIND_PRODUCT_FEEDBACK, KIND_PROFILE,
+    KIND_PROJECT, KIND_REACTION, KIND_READ_STATE, KIND_REPORT, KIND_STREAM_MESSAGE,
+    KIND_STREAM_MESSAGE_BOOKMARKED, KIND_STREAM_MESSAGE_DIFF, KIND_STREAM_MESSAGE_EDIT,
+    KIND_STREAM_MESSAGE_PINNED, KIND_STREAM_MESSAGE_SCHEDULED, KIND_STREAM_MESSAGE_V2,
+    KIND_STREAM_REMINDER, KIND_TEAM, KIND_TEAM_CATALOG, KIND_TEXT_NOTE, KIND_TRUST_PROVIDER_LIST,
+    KIND_USER_STATUS, KIND_USER_TRUSTED_ASSERTION, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
     RELAY_ADMIN_ADD_MEMBER, RELAY_ADMIN_CHANGE_ROLE, RELAY_ADMIN_REMOVE_MEMBER,
     RELAY_ADMIN_SET_WORKSPACE_PROFILE,
 };
@@ -328,9 +329,19 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
     match kind {
         KIND_PROFILE => Ok(Scope::UsersWrite),
         KIND_TEXT_NOTE | KIND_LONG_FORM => Ok(Scope::MessagesWrite),
-        KIND_CONTACT_LIST | KIND_READ_STATE | KIND_USER_STATUS | KIND_AGENT_ENGRAM
-        | KIND_EVENT_REMINDER | KIND_PERSONA | KIND_TEAM | KIND_MANAGED_AGENT
-        | KIND_PRIVATE_MANAGED_AGENT | KIND_TEAM_CATALOG | super::push_lease::KIND_PUSH_LEASE => {
+        KIND_CONTACT_LIST
+        | KIND_READ_STATE
+        | KIND_USER_STATUS
+        | KIND_TRUST_PROVIDER_LIST
+        | KIND_USER_TRUSTED_ASSERTION
+        | KIND_AGENT_ENGRAM
+        | KIND_EVENT_REMINDER
+        | KIND_PERSONA
+        | KIND_TEAM
+        | KIND_MANAGED_AGENT
+        | KIND_PRIVATE_MANAGED_AGENT
+        | KIND_TEAM_CATALOG
+        | super::push_lease::KIND_PUSH_LEASE => {
             Ok(Scope::UsersWrite)
         }
         // NIP-AM: agent turn metrics are agent-authored global events (encrypted to owner).
@@ -358,6 +369,7 @@ fn required_scope_for_kind(kind: u32, event: &Event) -> Result<Scope, &'static s
         | KIND_EMOJI_LIST
         | KIND_AGENT_PROFILE => Ok(Scope::UsersWrite),
         KIND_DELETION
+        | KIND_LABEL
         | KIND_REACTION
         | KIND_GIFT_WRAP
         | KIND_STREAM_MESSAGE
@@ -516,6 +528,8 @@ pub(crate) fn is_global_only_kind(kind: u32) -> bool {
             | KIND_CONTACT_LIST
             | KIND_LONG_FORM
             | KIND_USER_STATUS
+            | KIND_TRUST_PROVIDER_LIST
+            | KIND_USER_TRUSTED_ASSERTION
             | KIND_READ_STATE
             // NIP-51 standard lists + sets and NIP-65 relay list — user-owned global state.
             // Same as kind:3 (contacts): keyed by (pubkey, kind) or (pubkey, kind, d_tag),
@@ -1239,6 +1253,24 @@ fn single_bounded_d_tag<'a>(event: &'a Event, label: &str) -> Result<&'a str, St
         ));
     }
     Ok(d)
+}
+
+/// Validate the NIP-85 user-subject coordinate before it reaches generic
+/// NIP-33 replacement. A malformed or duplicate `d` tag must never alias the
+/// empty coordinate or create a second spelling for the same pubkey.
+fn validate_user_trusted_assertion(event: &Event) -> Result<(), String> {
+    const LABEL: &str = "NIP-85 user trusted assertion";
+    let subject = single_bounded_d_tag(event, LABEL)?;
+    if subject.len() != 64
+        || !subject
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(format!(
+            "{LABEL} `d` tag must be a 64-character lowercase hex pubkey"
+        ));
+    }
+    Ok(())
 }
 
 /// Validate the envelope of a kind:30175 persona event.
@@ -2532,6 +2564,11 @@ async fn ingest_event_inner(
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
     }
 
+    if kind_u32 == KIND_USER_TRUSTED_ASSERTION {
+        validate_user_trusted_assertion(&event)
+            .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
+    }
+
     if kind_u32 == KIND_PROJECT {
         validate_project_envelope(&event)
             .map_err(|e| IngestError::Rejected(format!("invalid: {e}")))?;
@@ -3283,6 +3320,65 @@ mod tests {
     #[test]
     fn reactions_do_not_require_h_tag() {
         assert!(!requires_h_channel_scope(KIND_REACTION));
+    }
+
+    #[test]
+    fn web_of_trust_kinds_have_the_expected_lifecycle_and_scope() {
+        let dummy = make_dummy_event();
+        assert_eq!(
+            required_scope_for_kind(KIND_LABEL, &dummy).unwrap(),
+            Scope::MessagesWrite,
+        );
+        assert!(!requires_h_channel_scope(KIND_LABEL));
+        assert!(!is_global_only_kind(KIND_LABEL));
+
+        assert_eq!(
+            required_scope_for_kind(KIND_TRUST_PROVIDER_LIST, &dummy).unwrap(),
+            Scope::UsersWrite,
+        );
+        assert!(buzz_core::kind::is_replaceable(KIND_TRUST_PROVIDER_LIST));
+        assert!(is_global_only_kind(KIND_TRUST_PROVIDER_LIST));
+
+        assert_eq!(
+            required_scope_for_kind(KIND_USER_TRUSTED_ASSERTION, &dummy).unwrap(),
+            Scope::UsersWrite,
+        );
+        assert!(is_parameterized_replaceable(KIND_USER_TRUSTED_ASSERTION));
+        assert!(is_global_only_kind(KIND_USER_TRUSTED_ASSERTION));
+    }
+
+    fn user_trusted_assertion_with_d_tags(values: &[&str]) -> Event {
+        let tags = values
+            .iter()
+            .map(|value| nostr::Tag::parse(["d", *value]).expect("d tag"))
+            .collect::<Vec<_>>();
+        EventBuilder::new(Kind::Custom(KIND_USER_TRUSTED_ASSERTION as u16), "")
+            .tags(tags)
+            .sign_with_keys(&nostr::Keys::generate())
+            .expect("sign trusted assertion")
+    }
+
+    #[test]
+    fn user_trusted_assertion_requires_one_canonical_pubkey_coordinate() {
+        let subject = "ab".repeat(32);
+        assert!(
+            validate_user_trusted_assertion(&user_trusted_assertion_with_d_tags(&[&subject]))
+                .is_ok()
+        );
+
+        for values in [
+            vec![],
+            vec![subject.as_str(), "cdcd"],
+            vec![""],
+            vec!["ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"],
+            vec!["not-a-pubkey"],
+        ] {
+            assert!(
+                validate_user_trusted_assertion(&user_trusted_assertion_with_d_tags(&values))
+                    .is_err(),
+                "values {values:?} should be rejected"
+            );
+        }
     }
 
     #[test]

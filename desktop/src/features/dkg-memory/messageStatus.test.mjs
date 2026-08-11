@@ -7,6 +7,7 @@ import { memoryStatusForMessage } from "./messageStatus.ts";
 import {
   advertisesDkgMemory,
   advertisesDkgSemanticQuery,
+  parseDkgMemoryCapabilities,
 } from "./capabilities.ts";
 import { buildMessageMemoryStatusMap } from "./messageStatusMap.ts";
 import {
@@ -295,4 +296,27 @@ test("relay discovery mirrors the ACP memory capability contract", () => {
   );
   assert.equal(advertisesDkgMemory({ supported_extensions: [] }), false);
   assert.equal(advertisesDkgMemory({}), false);
+
+  assert.equal(
+    parseDkgMemoryCapabilities({
+      supported_extensions: ["buzz-dkg-memory-v2"],
+      dkg_memory: {
+        schema_versions: [2],
+        profiles: ["dkg-memory@1", "dkg-trust@1"],
+        query_operations: ["trust_network"],
+      },
+    }).trust,
+    true,
+  );
+  assert.equal(
+    parseDkgMemoryCapabilities({
+      supported_extensions: ["buzz-dkg-memory-v2"],
+      dkg_memory: {
+        schema_versions: [2],
+        profiles: ["dkg-memory@1", "dkg-trust@1"],
+        query_operations: [],
+      },
+    }).trust,
+    false,
+  );
 });

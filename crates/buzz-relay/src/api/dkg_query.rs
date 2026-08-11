@@ -57,6 +57,7 @@ enum Operation {
     ContributorTrail,
     SoftwareContributors,
     DecisionTrace,
+    TrustNetwork,
     SubgraphGraph,
     SubgraphTriples,
     Evidence,
@@ -230,6 +231,10 @@ fn parse_and_sanitize_request(
 
     let arguments = match request.operation {
         Operation::ChannelMemory => {
+            let arguments: EmptyArguments = parse_arguments(request.arguments)?;
+            serde_json::to_value(arguments)
+        }
+        Operation::TrustNetwork => {
             let arguments: EmptyArguments = parse_arguments(request.arguments)?;
             serde_json::to_value(arguments)
         }
@@ -493,6 +498,7 @@ mod tests {
         let requester = requester();
         for (operation, arguments) in [
             ("channel_memory", serde_json::json!({})),
+            ("trust_network", serde_json::json!({})),
             (
                 "contributor_trail",
                 serde_json::json!({ "pubkey": nostr::Keys::generate().public_key().to_hex() }),

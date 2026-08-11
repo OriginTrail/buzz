@@ -98,7 +98,9 @@ fn validate_v2_content(
     let mut profile_ids = HashSet::new();
     for profile in profiles {
         let profile = profile.as_str().unwrap_or("");
-        if !matches!(profile, "dkg-memory@1" | "dkg-software@1") || !profile_ids.insert(profile) {
+        if !matches!(profile, "dkg-memory@1" | "dkg-software@1" | "dkg-trust@1")
+            || !profile_ids.insert(profile)
+        {
             return Err(CliError::Usage(
                 "memory proposal contains an unsupported or duplicate profile".into(),
             ));

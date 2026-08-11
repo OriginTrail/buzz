@@ -11,6 +11,7 @@ import { EvidenceCard } from "./EvidenceCard";
 import { GraphOverlay, type GraphOverlayTarget } from "./GraphOverlay";
 import { MemorySearch } from "./MemorySearch";
 import { SoftwareMemoryQuery } from "./SoftwareMemoryQuery";
+import { WebOfTrustPanel } from "./WebOfTrustPanel";
 
 const LAYER_META = {
   WM: { label: "Draft", hint: "only on this node", dot: "bg-slate-400" },
@@ -26,10 +27,12 @@ export function MemoryOverview({
   channelId,
   cg,
   data,
+  trustAvailable,
 }: {
   channelId: string;
   cg: string | null;
   data: ChannelMemory & { gate: "ok" };
+  trustAvailable: boolean;
 }) {
   const [trailPubkey, setTrailPubkey] = useState<string | null>(null);
   const [graphTarget, setGraphTarget] = useState<GraphOverlayTarget | null>(
@@ -99,13 +102,20 @@ export function MemoryOverview({
       </button>
 
       <Tabs defaultValue="overview" className="min-h-0">
-        <TabsList className="grid h-8 w-full grid-cols-2">
+        <TabsList
+          className={`grid h-8 w-full ${trustAvailable ? "grid-cols-3" : "grid-cols-2"}`}
+        >
           <TabsTrigger value="overview" className="py-0.5 text-xs">
             Overview
           </TabsTrigger>
           <TabsTrigger value="search" className="py-0.5 text-xs">
             Search graph
           </TabsTrigger>
+          {trustAvailable && (
+            <TabsTrigger value="trust" className="py-0.5 text-xs">
+              Trust
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="overview" className="space-y-4">
@@ -279,6 +289,12 @@ export function MemoryOverview({
             </div>
           </details>
         </TabsContent>
+
+        {trustAvailable && (
+          <TabsContent value="trust" className="space-y-4">
+            <WebOfTrustPanel channelId={channelId} />
+          </TabsContent>
+        )}
       </Tabs>
 
       {graphTarget && (

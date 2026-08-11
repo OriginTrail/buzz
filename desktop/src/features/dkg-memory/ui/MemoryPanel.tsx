@@ -6,6 +6,7 @@ import { enableChannelMemory } from "../api";
 import {
   useChannelContextGraph,
   useChannelMemory,
+  useDkgMemoryCapabilities,
   useDiscoveryFallback,
 } from "../hooks";
 import { DkgDiagnostics } from "./DkgDiagnostics";
@@ -19,6 +20,7 @@ import { resolveMemoryPanelState } from "./memoryPanelState";
 
 export function MemoryPanel({ channelId }: { channelId: string }) {
   const queryClient = useQueryClient();
+  const capabilities = useDkgMemoryCapabilities({ enabled: true });
   const cgQuery = useChannelContextGraph(channelId);
   const localCgOverride = cgQuery.data ?? null;
   const memory = useChannelMemory(
@@ -113,7 +115,12 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
         />
       )}
       {panelState.kind === "overview" && (
-        <MemoryOverview channelId={channelId} cg={cg} data={panelState.data} />
+        <MemoryOverview
+          channelId={channelId}
+          cg={cg}
+          data={panelState.data}
+          trustAvailable={capabilities.data?.trust ?? false}
+        />
       )}
     </PanelShell>
   );

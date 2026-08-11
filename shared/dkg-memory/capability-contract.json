@@ -9,5 +9,9 @@
     "operation": "semantic_query",
     "scope": "current_channel",
     "required_forms": ["select", "ask"]
+  },
+  "trust": {
+    "profile": "dkg-trust@1",
+    "operation": "trust_network"
   }
 }

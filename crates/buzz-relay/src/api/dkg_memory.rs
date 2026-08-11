@@ -228,8 +228,10 @@ fn validate_v2(proposal: ProposalV2) -> Result<(), (StatusCode, Json<Value>)> {
     }
     let mut profiles = HashSet::new();
     for profile in &proposal.profiles {
-        if !matches!(profile.as_str(), "dkg-memory@1" | "dkg-software@1")
-            || !profiles.insert(profile.as_str())
+        if !matches!(
+            profile.as_str(),
+            "dkg-memory@1" | "dkg-software@1" | "dkg-trust@1"
+        ) || !profiles.insert(profile.as_str())
         {
             return Err(invalid(
                 "profiles contains an unsupported or duplicate entry",

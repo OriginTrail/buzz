@@ -56,6 +56,12 @@ pub const KIND_CHANNEL_METADATA: u32 = 41;
 pub const KIND_DELETION: u32 = 5;
 /// NIP-25: Content is emoji char or `+`/`-`.
 pub const KIND_REACTION: u32 = 7;
+/// NIP-32: regular label event. Buzz Web of Trust uses the `buzz.wot` namespace
+/// for signed vouches with a `p` subject. Buzz may add an `h` tag to bind the
+/// vouch to a community channel; ordinary global NIP-32 labels remain valid.
+pub const KIND_LABEL: u32 = 1985;
+/// NIP-85: replaceable list of the assertion providers preferred by a user.
+pub const KIND_TRUST_PROVIDER_LIST: u32 = 10040;
 /// NIP-17: Outer envelope for private DMs — hides sender, content, timestamp.
 pub const KIND_GIFT_WRAP: u32 = 1059;
 /// NIP-94: File metadata attachment.
@@ -68,6 +74,9 @@ pub const KIND_LONG_FORM: u32 = 30023;
 /// Parameterized replaceable (NIP-33, 30000–39999 range) — keyed by `(pubkey, kind, d_tag)`.
 /// Stored globally (channel_id = NULL); user-owned personal data, not channel-scoped.
 pub const KIND_USER_STATUS: u32 = 30315;
+/// NIP-85: parameterized-replaceable trusted assertion about a user. The
+/// canonical `d` tag is the lowercase hex pubkey of the subject.
+pub const KIND_USER_TRUSTED_ASSERTION: u32 = 30382;
 /// NIP-78 / NIP-RS: Per-client read state blob for cross-device read position sync.
 /// Parameterized replaceable (NIP-33, 30000–39999 range) — keyed by `(pubkey, kind, d_tag)`.
 /// Stored globally (channel_id = NULL); user-owned personal data, not channel-scoped.
@@ -650,6 +659,8 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_CHANNEL_METADATA,
     KIND_DELETION,
     KIND_REACTION,
+    KIND_LABEL,
+    KIND_TRUST_PROVIDER_LIST,
     KIND_GIFT_WRAP,
     KIND_FILE_METADATA,
     KIND_AGENT_PROFILE,
@@ -731,6 +742,7 @@ pub const ALL_KINDS: &[u32] = &[
     KIND_WORKFLOW_DEF,
     KIND_LONG_FORM,
     KIND_USER_STATUS,
+    KIND_USER_TRUSTED_ASSERTION,
     KIND_READ_STATE,
     KIND_FORUM_POST,
     KIND_FORUM_VOTE,
@@ -855,6 +867,8 @@ pub fn event_kind_i32(event: &nostr::Event) -> i32 {
 }
 
 // Compile-time: new kinds are in the expected ranges.
+const _: () = assert!(is_replaceable(KIND_TRUST_PROVIDER_LIST));
+const _: () = assert!(is_parameterized_replaceable(KIND_USER_TRUSTED_ASSERTION));
 const _: () = assert!(is_replaceable(KIND_AGENT_PROFILE)); // 10100 ∈ 10000–19999
 const _: () = assert!(is_parameterized_replaceable(KIND_PERSONA)); // 30175 ∈ 30000–39999
 const _: () = assert!(is_parameterized_replaceable(KIND_TEAM)); // 30176 ∈ 30000–39999

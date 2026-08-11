@@ -4,6 +4,7 @@ import {
   deriveContextGraphId,
   fetchChannelMemory,
   fetchContributorTrail,
+  fetchTrustNetwork,
 } from "./api";
 import { fetchDkgMemoryCapabilities } from "./capabilities";
 
@@ -73,6 +74,15 @@ export function useContributorTrail(
     queryFn: () =>
       fetchContributorTrail(channelId as string, cg ?? null, pubkey as string),
     enabled: Boolean(channelId && pubkey),
+  });
+}
+
+export function useTrustNetwork(channelId: string | null) {
+  return useQuery({
+    queryKey: ["dkg-memory", "trust-network", channelId],
+    queryFn: () => fetchTrustNetwork(channelId as string),
+    enabled: Boolean(channelId),
+    refetchInterval: 30 * 1000,
   });
 }
 

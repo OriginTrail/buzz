@@ -12,7 +12,8 @@ use crate::config::DEFAULT_MAX_FRAME_BYTES;
 ///
 /// NIP-43 (relay membership) is advertised separately by [`RelayInfo::build`]
 /// only when membership enforcement is actually enabled — see that function.
-pub(crate) const SUPPORTED_NIPS: &[u32] = &[1, 2, 10, 11, 16, 17, 23, 25, 29, 33, 38, 42, 50, 56];
+pub(crate) const SUPPORTED_NIPS: &[u32] =
+    &[1, 2, 10, 11, 16, 17, 23, 25, 29, 32, 33, 38, 42, 50, 56, 85];
 
 /// NIP-43 (relay membership). Advertised only when the relay actually
 /// enforces membership (`BUZZ_REQUIRE_RELAY_MEMBERSHIP=true`) AND has a
@@ -238,7 +239,7 @@ fn push_descriptor(
 fn dkg_memory_descriptor() -> serde_json::Value {
     serde_json::json!({
         "schema_versions": [1, 2],
-        "profiles": ["dkg-memory@1", "dkg-software@1"],
+        "profiles": ["dkg-memory@1", "dkg-software@1", "dkg-trust@1"],
         "adapter_profiles": ["buzz-nostr@1"],
         "proposal_kind": 40009,
         "query_operations": [
@@ -246,6 +247,7 @@ fn dkg_memory_descriptor() -> serde_json::Value {
             "contributor_trail",
             "software_contributors",
             "decision_trace",
+            "trust_network",
             "subgraph_graph",
             "subgraph_triples",
             "evidence",
@@ -410,6 +412,18 @@ mod tests {
         assert!(
             SUPPORTED_NIPS.contains(&33),
             "NIP-33 (parameterized replaceable) must be advertised"
+        );
+    }
+
+    #[test]
+    fn supported_nips_include_web_of_trust_event_conventions() {
+        assert!(
+            SUPPORTED_NIPS.contains(&32),
+            "NIP-32 labels must be advertised when kind:1985 ingest is live"
+        );
+        assert!(
+            SUPPORTED_NIPS.contains(&85),
+            "NIP-85 assertions must be advertised when kinds 10040 and 30382 are live"
         );
     }
 
