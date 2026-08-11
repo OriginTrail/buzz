@@ -1,0 +1,13 @@
+{
+  "memory": {
+    "v1_extension": "buzz-dkg-memory-v1",
+    "v2_extension": "buzz-dkg-memory-v2",
+    "v2_schema_version": 2,
+    "v2_profile": "dkg-memory@1"
+  },
+  "semantic_query": {
+    "operation": "semantic_query",
+    "scope": "current_channel",
+    "required_forms": ["select", "ask"]
+  }
+}

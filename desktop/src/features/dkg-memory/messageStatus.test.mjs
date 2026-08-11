@@ -232,9 +232,24 @@ test("relay discovery mirrors the ACP memory capability contract", () => {
         schema_versions: [2],
         profiles: ["dkg-memory@1"],
         query_operations: ["semantic_query"],
+        semantic_query: {
+          scopes: ["current_channel"],
+          forms: ["select", "ask", "construct"],
+        },
       },
     }),
     true,
+  );
+  assert.equal(
+    advertisesDkgSemanticQuery({
+      supported_extensions: ["buzz-dkg-memory-v2"],
+      dkg_memory: {
+        schema_versions: [2],
+        profiles: ["dkg-memory@1"],
+        query_operations: ["semantic_query"],
+      },
+    }),
+    false,
   );
   assert.equal(
     advertisesDkgMemory({

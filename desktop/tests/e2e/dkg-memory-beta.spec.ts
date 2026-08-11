@@ -19,6 +19,10 @@ async function advertiseDkgMemory(page: import("@playwright/test").Page) {
           profiles: ["dkg-memory@1"],
           query_operations: ["channel_memory", "semantic_query"],
           schema_versions: [2],
+          semantic_query: {
+            scopes: ["current_channel"],
+            forms: ["select", "ask", "construct"],
+          },
         },
       }),
     });
@@ -40,6 +44,10 @@ test("channel memory exposes graph and authenticated search without named subgra
           profiles: ["dkg-memory@1"],
           query_operations: ["channel_memory", "semantic_query"],
           schema_versions: [2],
+          semantic_query: {
+            scopes: ["current_channel"],
+            forms: ["select", "ask", "construct"],
+          },
         },
       }),
     });

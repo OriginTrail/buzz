@@ -12,8 +12,17 @@ import { MessageMemoryStatus } from "./MessageMemoryStatus";
 export function useDkgMemoryMessageAdornments(
   channelId: string | null,
   messages: readonly TimelineMessage[],
+  threadHead: TimelineMessage | null,
+  threadMessages: readonly TimelineMessage[],
 ): ReadonlyMap<string, React.ReactNode> {
-  const statuses = useMessageMemoryStatusMap(channelId, messages);
+  const allMessages = React.useMemo(() => {
+    const byId = new Map<string, TimelineMessage>();
+    for (const message of messages) byId.set(message.id, message);
+    if (threadHead) byId.set(threadHead.id, threadHead);
+    for (const message of threadMessages) byId.set(message.id, message);
+    return [...byId.values()];
+  }, [messages, threadHead, threadMessages]);
+  const statuses = useMessageMemoryStatusMap(channelId, allMessages);
 
   return React.useMemo(() => {
     const result = new Map<string, React.ReactNode>();

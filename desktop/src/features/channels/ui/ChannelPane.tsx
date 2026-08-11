@@ -399,16 +399,11 @@ export const ChannelPane = React.memo(function ChannelPane({
     profiles,
     threadSummaries,
   });
-  const memoryMessages = React.useMemo(() => {
-    const byId = new Map<string, TimelineMessage>();
-    for (const message of messages) byId.set(message.id, message);
-    if (threadHeadMessage) byId.set(threadHeadMessage.id, threadHeadMessage);
-    for (const message of threadAllMessages) byId.set(message.id, message);
-    return [...byId.values()];
-  }, [messages, threadAllMessages, threadHeadMessage]);
   const messageBodyAdornments = useDkgMemoryMessageAdornments(
     activeChannelId,
-    memoryMessages,
+    messages,
+    threadHeadMessage,
+    threadAllMessages,
   );
   useRenderScopedReactionHydration({
     activeChannel,
@@ -449,7 +444,7 @@ export const ChannelPane = React.memo(function ChannelPane({
     profiles,
     threadAllMessages,
     threadHeadMessage,
-  ]);
+  });
 
   const isOverlay = useIsThreadPanelOverlay();
   const useSplitAuxiliaryPane = !isSinglePanelView && !isOverlay;

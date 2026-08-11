@@ -120,7 +120,36 @@ struct DkgCapabilities {
     semantic_query: bool,
 }
 
+#[derive(serde::Deserialize)]
+struct DkgCapabilityContract {
+    memory: DkgMemoryCapabilityContract,
+    semantic_query: DkgSemanticQueryCapabilityContract,
+}
+
+#[derive(serde::Deserialize)]
+struct DkgMemoryCapabilityContract {
+    v1_extension: String,
+    v2_extension: String,
+    v2_schema_version: u64,
+    v2_profile: String,
+}
+
+#[derive(serde::Deserialize)]
+struct DkgSemanticQueryCapabilityContract {
+    operation: String,
+    scope: String,
+    required_forms: Vec<String>,
+}
+
+fn dkg_capability_contract() -> Option<DkgCapabilityContract> {
+    serde_json::from_str(include_str!(
+        "../../../shared/dkg-memory/capability-contract.json"
+    ))
+    .ok()
+}
+
 fn nip11_dkg_memory_schema(value: &serde_json::Value) -> Option<u8> {
+    let contract = dkg_capability_contract()?;
     let extensions = value
         .get("supported_extensions")
         .and_then(serde_json::Value::as_array)
@@ -128,30 +157,38 @@ fn nip11_dkg_memory_schema(value: &serde_json::Value) -> Option<u8> {
         .unwrap_or_default();
     let supports_v2 = extensions
         .iter()
-        .any(|extension| extension.as_str() == Some("buzz-dkg-memory-v2"));
+        .any(|extension| extension.as_str() == Some(contract.memory.v2_extension.as_str()));
     let descriptor = value.get("dkg_memory");
     let descriptor_supports_v2 = descriptor
         .and_then(|item| item.get("schema_versions"))
         .and_then(serde_json::Value::as_array)
-        .is_some_and(|versions| versions.iter().any(|version| version.as_u64() == Some(2)))
+        .is_some_and(|versions| {
+            versions
+                .iter()
+                .any(|version| version.as_u64() == Some(contract.memory.v2_schema_version))
+        })
         && descriptor
             .and_then(|item| item.get("profiles"))
             .and_then(serde_json::Value::as_array)
             .is_some_and(|profiles| {
                 profiles
                     .iter()
-                    .any(|profile| profile.as_str() == Some("dkg-memory@1"))
+                    .any(|profile| profile.as_str() == Some(contract.memory.v2_profile.as_str()))
             });
     if supports_v2 && descriptor_supports_v2 {
-        return Some(2);
+        return u8::try_from(contract.memory.v2_schema_version).ok();
     }
     extensions
         .iter()
-        .any(|extension| extension.as_str() == Some("buzz-dkg-memory-v1"))
+        .any(|extension| extension.as_str() == Some(contract.memory.v1_extension.as_str()))
         .then_some(1)
 }
 
 fn nip11_dkg_semantic_query(value: &serde_json::Value) -> bool {
+    let contract = match dkg_capability_contract() {
+        Some(contract) => contract,
+        None => return false,
+    };
     let descriptor = match value.get("dkg_memory") {
         Some(descriptor) => descriptor,
         None => return false,
@@ -160,9 +197,9 @@ fn nip11_dkg_semantic_query(value: &serde_json::Value) -> bool {
         .get("query_operations")
         .and_then(serde_json::Value::as_array)
         .is_some_and(|operations| {
-            operations
-                .iter()
-                .any(|operation| operation.as_str() == Some("semantic_query"))
+            operations.iter().any(|operation| {
+                operation.as_str() == Some(contract.semantic_query.operation.as_str())
+            })
         });
     let semantic = match descriptor.get("semantic_query") {
         Some(semantic) => semantic,
@@ -174,13 +211,21 @@ fn nip11_dkg_semantic_query(value: &serde_json::Value) -> bool {
         .is_some_and(|scopes| {
             scopes
                 .iter()
-                .any(|scope| scope.as_str() == Some("current_channel"))
+                .any(|scope| scope.as_str() == Some(contract.semantic_query.scope.as_str()))
         });
     let forms = semantic.get("forms").and_then(serde_json::Value::as_array);
-    let has_form = |expected: &str| {
-        forms.is_some_and(|items| items.iter().any(|item| item.as_str() == Some(expected)))
-    };
-    operation && current_channel && has_form("select") && has_form("ask")
+    let has_required_forms = contract
+        .semantic_query
+        .required_forms
+        .iter()
+        .all(|expected| {
+            forms.is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item.as_str() == Some(expected.as_str()))
+            })
+        });
+    operation && current_channel && has_required_forms
 }
 
 async fn relay_dkg_capabilities(relay_url: &str) -> DkgCapabilities {

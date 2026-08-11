@@ -2,10 +2,8 @@ import * as React from "react";
 
 import {
   ensureRelayObserverSubscription,
-  getAgentObserverChannelSnapshot,
   subscribeAgentObserverStore,
 } from "@/features/agents/observerRelayStore";
-import type { TranscriptItem } from "@/features/agents/ui/agentSessionTypes";
 import type { TimelineMessage } from "@/features/messages/types";
 import { getRelayHttpUrl } from "@/shared/api/tauri";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -14,6 +12,10 @@ import {
   memoryStatusForMessage,
   type MessageMemoryStatus,
 } from "./messageStatus";
+import {
+  createChannelMemoryEvidenceSelector,
+  type AgentMemoryEvidenceMap,
+} from "./observerEvidenceSelector";
 
 export type AgentMessageMemoryStatus = {
   agentName: string;
@@ -26,34 +28,42 @@ async function relayAdvertisesDkgMemory(): Promise<boolean> {
   return (await readDkgMemoryCapabilities(relay)).memory;
 }
 
-function useDkgMemoryExpectation(channelId: string | null): boolean {
+const CAPABILITY_RETRY_DELAYS_MS = [250, 1_000, 5_000] as const;
+
+export function useDkgMemoryExpectation(channelId: string | null): boolean {
   const [expected, setExpected] = React.useState(false);
 
   React.useEffect(() => {
     let cancelled = false;
+    let retryAttempt = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
     setExpected(false);
     if (!channelId) return () => undefined;
-    void relayAdvertisesDkgMemory()
-      .then((advertised) => {
-        if (!cancelled) setExpected(advertised);
-      })
-      .catch(() => {
-        if (!cancelled) setExpected(false);
-      });
+
+    const discover = () => {
+      void relayAdvertisesDkgMemory()
+        .then((advertised) => {
+          if (!cancelled) setExpected(advertised);
+        })
+        .catch(() => {
+          if (cancelled) return;
+          const delay =
+            CAPABILITY_RETRY_DELAYS_MS[
+              Math.min(retryAttempt, CAPABILITY_RETRY_DELAYS_MS.length - 1)
+            ];
+          retryAttempt += 1;
+          retryTimer = setTimeout(discover, delay);
+        });
+    };
+    discover();
     return () => {
       cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
     };
   }, [channelId]);
 
   return expected;
 }
-
-export type AgentMemoryEvidence = {
-  completedTurnIds: ReadonlySet<string>;
-  transcript: readonly TranscriptItem[];
-};
-
-export type AgentMemoryEvidenceMap = ReadonlyMap<string, AgentMemoryEvidence>;
 
 /**
  * Derive every visible agent-message badge in one channel-level pass. A relay
@@ -115,35 +125,15 @@ export function useMessageMemoryStatusMap(
     () => (agentPubkeysKey ? agentPubkeysKey.split("\u0000") : []),
     [agentPubkeysKey],
   );
-  const readObserverSnapshot = React.useCallback(
-    () => getAgentObserverChannelSnapshot(resolvedChannelId, agentPubkeys),
+  const readEvidence = React.useMemo(
+    () => createChannelMemoryEvidenceSelector(resolvedChannelId, agentPubkeys),
     [agentPubkeys, resolvedChannelId],
   );
-  const observerSnapshot = React.useSyncExternalStore(
+  const evidenceByAgent = React.useSyncExternalStore(
     subscribeAgentObserverStore,
-    readObserverSnapshot,
+    readEvidence,
   );
   const hasAgentMessages = agentPubkeys.length > 0;
-  const evidenceByAgent = React.useMemo<AgentMemoryEvidenceMap>(() => {
-    const result = new Map<string, AgentMemoryEvidence>();
-    for (const [pubkey, snapshot] of observerSnapshot) {
-      result.set(pubkey, {
-        completedTurnIds: new Set(
-          snapshot.events
-            .filter(
-              (event) =>
-                event.turnId &&
-                ["turn_completed", "turn_error", "agent_panic"].includes(
-                  event.kind,
-                ),
-            )
-            .map((event) => event.turnId as string),
-        ),
-        transcript: snapshot.transcript,
-      });
-    }
-    return result;
-  }, [observerSnapshot]);
 
   React.useEffect(() => {
     if (memoryExpected && hasAgentMessages) {

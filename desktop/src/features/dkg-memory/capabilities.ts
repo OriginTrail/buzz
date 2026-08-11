@@ -1,3 +1,7 @@
+import capabilityContract from "../../../../shared/dkg-memory/capability-contract.json" with {
+  type: "json",
+};
+
 export type DkgMemoryCapabilities = {
   memory: boolean;
   semanticQuery: boolean;
@@ -27,11 +31,11 @@ export function parseDkgMemoryCapabilities(
   const capability = document as RelayCapabilityDocument;
   const supportsV1 = hasString(
     capability.supported_extensions,
-    "buzz-dkg-memory-v1",
+    capabilityContract.memory.v1_extension,
   );
   const supportsV2 = hasString(
     capability.supported_extensions,
-    "buzz-dkg-memory-v2",
+    capabilityContract.memory.v2_extension,
   );
   const descriptor =
     capability.dkg_memory && typeof capability.dkg_memory === "object"
@@ -39,18 +43,37 @@ export function parseDkgMemoryCapabilities(
           profiles?: unknown;
           query_operations?: unknown;
           schema_versions?: unknown;
+          semantic_query?: unknown;
         })
       : null;
   const descriptorSupportsV2 =
     supportsV2 &&
     Array.isArray(descriptor?.schema_versions) &&
-    descriptor.schema_versions.some((version) => version === 2) &&
-    hasString(descriptor.profiles, "dkg-memory@1");
+    descriptor.schema_versions.some(
+      (version) => version === capabilityContract.memory.v2_schema_version,
+    ) &&
+    hasString(descriptor.profiles, capabilityContract.memory.v2_profile);
   const memory = supportsV1 || descriptorSupportsV2;
+  const semanticDescriptor =
+    descriptor?.semantic_query && typeof descriptor.semantic_query === "object"
+      ? (descriptor.semantic_query as { forms?: unknown; scopes?: unknown })
+      : null;
+  const semanticQuery =
+    memory &&
+    hasString(
+      descriptor?.query_operations,
+      capabilityContract.semantic_query.operation,
+    ) &&
+    hasString(
+      semanticDescriptor?.scopes,
+      capabilityContract.semantic_query.scope,
+    ) &&
+    capabilityContract.semantic_query.required_forms.every((form) =>
+      hasString(semanticDescriptor?.forms, form),
+    );
   return {
     memory,
-    semanticQuery:
-      memory && hasString(descriptor?.query_operations, "semantic_query"),
+    semanticQuery,
   };
 }
 

@@ -393,14 +393,19 @@ struct ProposalStateContract {
     processing: Vec<String>,
 }
 
-fn proposal_state_contract() -> &'static ProposalStateContract {
-    static CONTRACT: OnceLock<ProposalStateContract> = OnceLock::new();
-    CONTRACT.get_or_init(|| {
-        serde_json::from_str(include_str!(
-            "../../../../shared/dkg-memory/proposal-states.json"
-        ))
-        .expect("checked-in DKG memory lifecycle contract must be valid JSON")
-    })
+fn proposal_state_contract() -> Result<&'static ProposalStateContract, CliError> {
+    static CONTRACT: OnceLock<Result<ProposalStateContract, String>> = OnceLock::new();
+    CONTRACT
+        .get_or_init(|| {
+            serde_json::from_str(include_str!(
+                "../../../../shared/dkg-memory/proposal-states.json"
+            ))
+            .map_err(|error| error.to_string())
+        })
+        .as_ref()
+        .map_err(|error| {
+            CliError::Other(format!("DKG memory lifecycle contract is invalid: {error}"))
+        })
 }
 
 /// Normalize beta relay phases through the same checked-in compatibility
@@ -415,7 +420,7 @@ fn normalize_proposal_response(response: &str) -> Result<(String, ProposalProgre
         .and_then(serde_json::Value::as_str)
         .unwrap_or("")
         .to_string();
-    let contract = proposal_state_contract();
+    let contract = proposal_state_contract()?;
     let (external, progress) = if contract.stored.iter().any(|entry| entry == &state) {
         (Some("stored"), ProposalProgress::Stored)
     } else if contract.processing.iter().any(|entry| entry == &state) {
@@ -521,6 +526,13 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("relations[0].subject"));
+    }
+
+    #[test]
+    fn checked_in_proposal_state_contract_covers_beta_states() {
+        let contract = proposal_state_contract().unwrap();
+        assert!(contract.processing.iter().any(|state| state == "distilled"));
+        assert!(contract.stored.iter().any(|state| state == "receipted"));
     }
 
     #[test]
