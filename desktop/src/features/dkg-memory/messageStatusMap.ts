@@ -5,9 +5,8 @@ import {
   subscribeAgentObserverStore,
 } from "@/features/agents/observerRelayStore";
 import type { TimelineMessage } from "@/features/messages/types";
-import { getRelayHttpUrl } from "@/shared/api/tauri";
 import { normalizePubkey } from "@/shared/lib/pubkey";
-import { readDkgMemoryCapabilities } from "./capabilities";
+import { useDkgMemoryCapabilities } from "./hooks";
 import {
   memoryStatusForMessage,
   type MessageMemoryStatus,
@@ -23,46 +22,8 @@ export type AgentMessageMemoryStatus = {
   status: MessageMemoryStatus;
 };
 
-async function relayAdvertisesDkgMemory(): Promise<boolean> {
-  const relay = (await getRelayHttpUrl()).replace(/\/+$/, "");
-  return (await readDkgMemoryCapabilities(relay)).memory;
-}
-
-const CAPABILITY_RETRY_DELAYS_MS = [250, 1_000, 5_000] as const;
-
 export function useDkgMemoryExpectation(channelId: string | null): boolean {
-  const [expected, setExpected] = React.useState(false);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    let retryAttempt = 0;
-    let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    setExpected(false);
-    if (!channelId) return () => undefined;
-
-    const discover = () => {
-      void relayAdvertisesDkgMemory()
-        .then((advertised) => {
-          if (!cancelled) setExpected(advertised);
-        })
-        .catch(() => {
-          if (cancelled) return;
-          const delay =
-            CAPABILITY_RETRY_DELAYS_MS[
-              Math.min(retryAttempt, CAPABILITY_RETRY_DELAYS_MS.length - 1)
-            ];
-          retryAttempt += 1;
-          retryTimer = setTimeout(discover, delay);
-        });
-    };
-    discover();
-    return () => {
-      cancelled = true;
-      if (retryTimer) clearTimeout(retryTimer);
-    };
-  }, [channelId]);
-
-  return expected;
+  return useDkgMemoryCapabilities(channelId).data?.memory ?? false;
 }
 
 /**

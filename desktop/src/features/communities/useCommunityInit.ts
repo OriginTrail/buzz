@@ -16,7 +16,6 @@ import { resetMediaCaches } from "@/shared/lib/mediaUrl";
 import { resetLinkPreviewMetadataCache } from "@/shared/lib/useResolvedLinkPreviews";
 import { clearSearchHitEventCache } from "@/app/navigation/searchHitEventCache";
 import { resetDkgMemoryProvider } from "@/features/dkg-memory/api";
-import { resetDkgMemoryCapabilityCache } from "@/features/dkg-memory/capabilities";
 import { resetDkgMemoryDockState } from "@/features/dkg-memory/ui/memoryDockStore";
 import {
   clearAllDrafts,
@@ -77,7 +76,6 @@ function resetCommunityState({
   clearSearchHitEventCache();
   clearMarkdownNodeCache();
   resetDkgMemoryProvider();
-  resetDkgMemoryCapabilityCache();
   resetDkgMemoryDockState();
 }
 

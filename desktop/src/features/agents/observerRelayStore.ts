@@ -516,6 +516,26 @@ export function subscribeAgentObserverStore(listener: () => void) {
   };
 }
 
+/**
+ * Wrap a caller-owned projection in reference-stable external-store semantics.
+ * The observer store owns snapshot stabilization while feature modules own
+ * only their domain-specific projection and equality.
+ */
+export function createAgentObserverStoreSelector<T>(
+  select: () => T,
+  isEqual: (left: T, right: T) => boolean = Object.is,
+): () => T {
+  let initialized = false;
+  let snapshot: T;
+  return () => {
+    const next = select();
+    if (initialized && isEqual(snapshot, next)) return snapshot;
+    initialized = true;
+    snapshot = next;
+    return snapshot;
+  };
+}
+
 function isControlResultFrame(payload: unknown): payload is ControlResultFrame {
   return (
     typeof payload === "object" &&

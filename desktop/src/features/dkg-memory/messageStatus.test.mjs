@@ -4,8 +4,6 @@ import { memoryStatusForMessage } from "./messageStatus.ts";
 import {
   advertisesDkgMemory,
   advertisesDkgSemanticQuery,
-  readDkgMemoryCapabilities,
-  resetDkgMemoryCapabilityCache,
 } from "./capabilities.ts";
 import { buildMessageMemoryStatusMap } from "./messageStatusMap.ts";
 
@@ -259,31 +257,4 @@ test("relay discovery mirrors the ACP memory capability contract", () => {
   );
   assert.equal(advertisesDkgMemory({ supported_extensions: [] }), false);
   assert.equal(advertisesDkgMemory({}), false);
-});
-
-test("relay discovery retries after a transient failure", async () => {
-  resetDkgMemoryCapabilityCache();
-  let reads = 0;
-  const readDocument = async () => {
-    reads += 1;
-    if (reads === 1) throw new Error("relay not ready");
-    return {
-      supported_extensions: ["buzz-dkg-memory-v2"],
-      dkg_memory: {
-        schema_versions: [2],
-        profiles: ["dkg-memory@1"],
-      },
-    };
-  };
-
-  await assert.rejects(
-    readDkgMemoryCapabilities("https://relay.example", readDocument),
-    /relay not ready/,
-  );
-  assert.deepEqual(
-    await readDkgMemoryCapabilities("https://relay.example", readDocument),
-    { memory: true, semanticQuery: false },
-  );
-  assert.equal(reads, 2);
-  resetDkgMemoryCapabilityCache();
 });

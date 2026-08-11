@@ -5,6 +5,7 @@ import {
   injectObserverEventsForE2E,
   resetAgentObserverStore,
 } from "@/features/agents/observerRelayStore";
+import { buildMessageMemoryStatusMap } from "./messageStatusMap.ts";
 import { createChannelMemoryEvidenceSelector } from "./observerEvidenceSelector.ts";
 
 const AGENT = "a".repeat(64);
@@ -40,6 +41,32 @@ function toolEvent(seq, channelId) {
   };
 }
 
+function publishEvent(seq, channelId, messageId, turnId) {
+  const event = toolEvent(seq, channelId);
+  event.turnId = turnId;
+  event.payload.params.update.toolCallId = `publish-${seq}`;
+  event.payload.params.update.rawInput = {
+    command: `buzz messages send --channel ${channelId}`,
+  };
+  event.payload.params.update.rawOutput = JSON.stringify({
+    event_id: messageId,
+  });
+  return event;
+}
+
+function lifecycleEvent(seq, channelId, turnId) {
+  return {
+    seq,
+    timestamp: `2026-08-11T08:01:${String(seq).padStart(2, "0")}.000Z`,
+    kind: "turn_completed",
+    agentIndex: 0,
+    channelId,
+    sessionId: "session-one",
+    turnId,
+    payload: {},
+  };
+}
+
 afterEach(() => resetAgentObserverStore());
 
 test("channel memory evidence ignores unrelated agents and transcript entries", () => {
@@ -59,4 +86,46 @@ test("channel memory evidence ignores unrelated agents and transcript entries", 
   const afterRelevantTranscript = readEvidence();
   assert.notStrictEqual(afterRelevantTranscript, initial);
   assert.equal(afterRelevantTranscript.get(AGENT)?.transcript.length, 1);
+});
+
+test("completed turns move an unproposed published message from recording to failed", () => {
+  const messageId = "d".repeat(64);
+  const turnId = "turn-publish";
+  const message = {
+    id: messageId,
+    author: "Fizz",
+    isAgent: true,
+    signerPubkey: AGENT,
+  };
+  const readEvidence = createChannelMemoryEvidenceSelector(CHANNEL, [AGENT]);
+
+  injectObserverEventsForE2E(AGENT, [
+    publishEvent(4, CHANNEL, messageId, turnId),
+  ]);
+  const recordingEvidence = readEvidence();
+  assert.equal(
+    buildMessageMemoryStatusMap(
+      CHANNEL,
+      [message],
+      true,
+      recordingEvidence,
+    ).get(messageId)?.status,
+    "recording",
+  );
+
+  injectObserverEventsForE2E(AGENT, [lifecycleEvent(5, CHANNEL, turnId)]);
+  const completedEvidence = readEvidence();
+  assert.equal(
+    completedEvidence.get(AGENT)?.completedTurnIds.has(turnId),
+    true,
+  );
+  assert.equal(
+    buildMessageMemoryStatusMap(
+      CHANNEL,
+      [message],
+      true,
+      completedEvidence,
+    ).get(messageId)?.status,
+    "failed",
+  );
 });

@@ -6,7 +6,7 @@
 // authorization input.
 import { relayClient } from "@/shared/api/relayClient";
 import { getRelayHttpUrl, signRelayEvent } from "@/shared/api/tauri";
-import { readDkgMemoryCapabilities } from "./capabilities";
+import { fetchDkgMemoryCapabilities } from "./capabilities";
 import { postAuthenticatedDkgJson, queryDkgProvider } from "./provider";
 import {
   memoryProposalProgress,
@@ -182,7 +182,7 @@ export async function runDkgDiagnostics(
   const relay = (await getRelayHttpUrl()).replace(/\/+$/, "");
   const checks: DkgDiagnosticCheck[] = [];
   const capability = await timedDiagnostic(async () => {
-    const discovered = await readDkgMemoryCapabilities(relay);
+    const discovered = await fetchDkgMemoryCapabilities(relay);
     if (!discovered.memory || !discovered.semanticQuery) {
       throw new Error(
         "Relay does not advertise the required DKG memory capabilities.",

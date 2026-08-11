@@ -12,8 +12,6 @@ type RelayCapabilityDocument = {
   supported_extensions?: unknown;
 };
 
-const capabilityByRelay = new Map<string, Promise<DkgMemoryCapabilities>>();
-
 function hasString(values: unknown, expected: string): boolean {
   return Array.isArray(values) && values.some((entry) => entry === expected);
 }
@@ -85,11 +83,8 @@ export function advertisesDkgSemanticQuery(document: unknown): boolean {
   return parseDkgMemoryCapabilities(document).semanticQuery;
 }
 
-/**
- * Read and cache one typed capability decision per relay. Transport, HTTP, and
- * JSON failures evict themselves so later channel views or diagnostics retry.
- */
-export function readDkgMemoryCapabilities(
+/** Fetch one typed capability decision. Query hooks own caching and retries. */
+export async function fetchDkgMemoryCapabilities(
   relay: string,
   readDocument: () => Promise<unknown> = async () => {
     const response = await fetch(`${relay}/`, {
@@ -102,18 +97,5 @@ export function readDkgMemoryCapabilities(
     return response.json();
   },
 ): Promise<DkgMemoryCapabilities> {
-  const cached = capabilityByRelay.get(relay);
-  if (cached) return cached;
-  const request = readDocument().then(parseDkgMemoryCapabilities);
-  capabilityByRelay.set(relay, request);
-  void request.catch(() => {
-    if (capabilityByRelay.get(relay) === request) {
-      capabilityByRelay.delete(relay);
-    }
-  });
-  return request;
-}
-
-export function resetDkgMemoryCapabilityCache(): void {
-  capabilityByRelay.clear();
+  return parseDkgMemoryCapabilities(await readDocument());
 }

@@ -8,6 +8,7 @@ const dom = new JSDOM("<!doctype html><html><body></body></html>", {
   url: "http://localhost",
 });
 const originalFetch = globalThis.fetch;
+let queryClient;
 
 before(() => {
   Object.assign(globalThis, {
@@ -29,14 +30,17 @@ before(() => {
 after(() => dom.window.close());
 afterEach(async () => {
   const { cleanup } = await import("@testing-library/react");
-  const { resetDkgMemoryCapabilityCache } = await import("./capabilities.ts");
   cleanup();
-  resetDkgMemoryCapabilityCache();
+  queryClient?.clear();
+  queryClient = undefined;
   globalThis.fetch = originalFetch;
 });
 
 test("a mounted channel retries capability discovery and reveals stored memory", async () => {
   const React = await import("react");
+  const { QueryClient, QueryClientProvider } = await import(
+    "@tanstack/react-query"
+  );
   const { render, waitFor } = await import("@testing-library/react");
   const { buildMessageMemoryStatusMap, useDkgMemoryExpectation } = await import(
     "./messageStatusMap.ts"
@@ -111,7 +115,16 @@ test("a mounted channel retries capability discovery and reveals stored memory",
     );
   }
 
-  const view = render(React.createElement(Harness));
+  queryClient = new QueryClient({
+    defaultOptions: { queries: { gcTime: Number.POSITIVE_INFINITY } },
+  });
+  const view = render(
+    React.createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      React.createElement(Harness),
+    ),
+  );
   assert.equal(view.getByTestId("memory").textContent, "none");
   await waitFor(
     () => assert.equal(view.getByTestId("memory").textContent, "stored"),
