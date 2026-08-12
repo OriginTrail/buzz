@@ -229,17 +229,23 @@ async fn fetch_relay_dkg_capabilities(relay_url: &str) -> Result<DkgCapabilities
 }
 
 async fn relay_dkg_capabilities(relay_url: &str) -> DkgCapabilities {
-    for attempt in 0..DKG_CAPABILITY_ATTEMPTS {
+    let attempts = DKG_CAPABILITY_RETRY_DELAYS
+        .iter()
+        .copied()
+        .map(Some)
+        .chain(std::iter::once(None));
+    for (attempt, retry_delay) in attempts.enumerate() {
         match fetch_relay_dkg_capabilities(relay_url).await {
             Ok(capabilities) => return capabilities,
-            Err(error) if attempt + 1 < DKG_CAPABILITY_ATTEMPTS => {
-                let delay = DKG_CAPABILITY_RETRY_DELAYS[attempt];
-                tracing::warn!(attempt = attempt + 1, %error, ?delay, "relay capability discovery failed; retrying");
-                tokio::time::sleep(delay).await;
-            }
-            Err(error) => {
-                tracing::warn!(attempt = attempt + 1, %error, "relay capability discovery failed; DKG memory disabled for this agent session");
-            }
+            Err(error) => match retry_delay {
+                Some(delay) => {
+                    tracing::warn!(attempt = attempt + 1, %error, ?delay, "relay capability discovery failed; retrying");
+                    tokio::time::sleep(delay).await;
+                }
+                None => {
+                    tracing::warn!(attempt = attempt + 1, %error, "relay capability discovery failed; DKG memory disabled for this agent session");
+                }
+            },
         }
     }
     DkgCapabilities::default()
