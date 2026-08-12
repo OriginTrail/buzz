@@ -12,6 +12,8 @@ import {
   fetchSoftwareContributors,
   fetchTrustNetwork,
   publishTrustVouch,
+  retryPendingTrustProjections,
+  revokeTrustVouch,
 } from "./api.ts";
 import {
   DkgProviderError,
@@ -483,12 +485,14 @@ test("reputation uses a fixed subject query and returns an explainable bounded s
             directVouch: true,
             twoHopVouchers: 1,
             independentVouchers: 3,
+            independentLineages: 3,
             evidenceRecords: 4,
             verifiableEvidence: false,
           },
           reasons: ["Three independent people signed vouches."],
           evidence: [],
-          methodology: "dkg-reputation-v1",
+          workEvidence: [],
+          methodology: "dkg-reputation-v2",
         },
       }),
     );
@@ -502,7 +506,7 @@ test("reputation uses a fixed subject query and returns an explainable bounded s
   });
   assert.equal(JSON.stringify(body).includes("sparql"), false);
   assert.equal(result.score, 74);
-  assert.equal(result.methodology, "dkg-reputation-v1");
+  assert.equal(result.methodology, "dkg-reputation-v2");
 });
 
 test("a vouch signs and publishes human evidence before proposing its DKG projection", async () => {
@@ -543,7 +547,17 @@ test("a vouch signs and publishes human evidence before proposing its DKG projec
     channelId: CHANNEL_ID,
     subjectPubkey: subject,
     subjectName: "Alice",
-    note: "  Caught a rollback edge case while reviewing two releases.  ",
+    note: "  Caught a rollback edge case\nwhile reviewing two releases.  ",
+    evidence: [
+      {
+        uri: "urn:dkg:github:commit:github.com/acme/api/abc1234",
+        kind: "http://dkg.io/ontology/github/Commit",
+        name: "abc1234: rollback fix",
+        sourceEvent: `urn:nostr:event:${"8".repeat(64)}`,
+        at: 1_786_363_100,
+        layer: "SWM",
+      },
+    ],
   });
 
   assert.equal(result.eventId, "1".repeat(64));
@@ -560,6 +574,8 @@ test("a vouch signs and publishes human evidence before proposing its DKG projec
     ["L", "buzz.wot"],
     ["l", "vouch", "buzz.wot"],
     ["p", subject],
+    ["r", "urn:dkg:github:commit:github.com/acme/api/abc1234"],
+    ["e", "8".repeat(64), "", "evidence"],
   ]);
 
   assert.equal(memoryRequest.kind, 40009);
@@ -571,11 +587,203 @@ test("a vouch signs and publishes human evidence before proposing its DKG projec
   const proposal = JSON.parse(memoryRequest.content);
   assert.deepEqual(proposal.profiles, ["dkg-memory@1", "dkg-trust@1"]);
   assert.equal(proposal.entities[0].type, "trust:Vouch");
+  assert.equal(
+    proposal.entities[0].locator.uri,
+    `urn:buzz-dkg:vouch:${"1".repeat(64)}`,
+  );
   assert.equal(proposal.entities[1].locator.uri, `urn:nostr:pubkey:${issuer}`);
   assert.equal(proposal.entities[2].locator.uri, `urn:nostr:pubkey:${subject}`);
+  assert.deepEqual(proposal.entities[3].attributes, [
+    {
+      predicate: "trust:evidenceTarget",
+      value: "urn:dkg:github:commit:github.com/acme/api/abc1234",
+    },
+    {
+      predicate: "trust:evidenceSource",
+      value: `urn:nostr:event:${"8".repeat(64)}`,
+    },
+  ]);
   assert.deepEqual(proposal.relations, [
     { subject: "vouch", predicate: "trust:issuer", object: "issuer" },
     { subject: "vouch", predicate: "trust:subject", object: "subject" },
+    {
+      subject: "vouch",
+      predicate: "trust:supportedBy",
+      object: "evidence-1",
+    },
   ]);
   assert.equal(signed.at(-1).kind, 27235);
+});
+
+test("revoke publishes an append-only signed lifecycle event and exact DKG projection", async () => {
+  const issuer = "a".repeat(64);
+  const subject = "b".repeat(64);
+  const target = "9".repeat(64);
+  const signed = [];
+  installTauri("https://relay.example/", (args) => {
+    const event = {
+      id: String(signed.length + 1).repeat(64),
+      sig: "c".repeat(128),
+      pubkey: issuer,
+      kind: args.kind,
+      created_at: 1_786_363_200 + signed.length,
+      tags: args.tags,
+      content: args.content,
+    };
+    signed.push(event);
+    return event;
+  });
+  const published = [];
+  mock.method(relayClient, "publishEvent", async (event) =>
+    published.push(event),
+  );
+  let memoryRequest;
+  globalThis.fetch = async (_url, init) => {
+    memoryRequest = JSON.parse(String(init.body));
+    return new Response(JSON.stringify({ state: "stored" }));
+  };
+
+  const result = await revokeTrustVouch({
+    channelId: CHANNEL_ID,
+    subjectPubkey: subject,
+    targetEventId: target,
+  });
+
+  assert.equal(result.eventId, "1".repeat(64));
+  assert.equal(published.length, 1);
+  assert.deepEqual(published[0].tags, [
+    ["h", CHANNEL_ID],
+    ["L", "buzz.wot"],
+    ["l", "revoke", "buzz.wot"],
+    ["p", subject],
+    ["e", target, "", "target"],
+  ]);
+  const proposal = JSON.parse(memoryRequest.content);
+  assert.equal(proposal.entities[0].type, "trust:VouchLifecycle");
+  assert.deepEqual(proposal.entities[0].attributes, [
+    { predicate: "trust:status", value: "revoked" },
+    { predicate: "trust:scope", value: "channel" },
+    {
+      predicate: "trust:targetVouch",
+      value: `urn:buzz-dkg:vouch:${target}`,
+    },
+  ]);
+  assert.equal(
+    proposal.entities[0].locator.uri,
+    `urn:buzz-dkg:vouch-lifecycle:${"1".repeat(64)}`,
+  );
+});
+
+test("a published vouch queues its exact failed graph projection and retries without duplication", async () => {
+  const issuer = "a".repeat(64);
+  const subject = "b".repeat(64);
+  const signed = [];
+  installTauri("https://relay.example/", (args) => {
+    const event = {
+      id: String(signed.length + 1).repeat(64),
+      sig: "c".repeat(128),
+      pubkey: issuer,
+      kind: args.kind,
+      created_at: 1_786_363_200 + signed.length,
+      tags: args.tags,
+      content: args.content,
+    };
+    signed.push(event);
+    return event;
+  });
+  const storage = new Map();
+  globalThis.localStorage = {
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  const published = [];
+  mock.method(relayClient, "publishEvent", async (event) => {
+    published.push(event);
+  });
+  globalThis.fetch = async () => {
+    throw new TypeError("gateway temporarily unavailable");
+  };
+
+  const result = await publishTrustVouch({
+    channelId: CHANNEL_ID,
+    subjectPubkey: subject,
+    subjectName: "Alice",
+    note: "Reviewed the release.",
+  });
+  assert.equal(result.state, "projection_pending");
+  assert.equal(published.length, 1);
+  const queued = JSON.parse(
+    storage.get("buzz-dkg-trust-projections.v1") ?? "[]",
+  );
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].sourceEventId, published[0].id);
+  const proposalBody = queued[0].proposalBody;
+
+  globalThis.fetch = async (_url, init) => {
+    assert.equal(String(init.body), proposalBody);
+    return new Response(JSON.stringify({ state: "stored" }));
+  };
+  assert.deepEqual(await retryPendingTrustProjections(CHANNEL_ID), {
+    completed: 1,
+    remaining: 0,
+  });
+  assert.equal(published.length, 1, "retry must not publish another vouch");
+  assert.equal(storage.has("buzz-dkg-trust-projections.v1"), false);
+});
+
+test("a failed relay delivery queues the exact signed trust event before graph projection", async () => {
+  const issuer = "a".repeat(64);
+  const subject = "b".repeat(64);
+  const signed = [];
+  installTauri("https://relay.example/", (args) => {
+    const event = {
+      id: String(signed.length + 1).repeat(64),
+      sig: "c".repeat(128),
+      pubkey: issuer,
+      kind: args.kind,
+      created_at: 1_786_363_200 + signed.length,
+      tags: args.tags,
+      content: args.content,
+    };
+    signed.push(event);
+    return event;
+  });
+  const storage = new Map();
+  globalThis.localStorage = {
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  let relayAvailable = false;
+  const published = [];
+  mock.method(relayClient, "publishEvent", async (event) => {
+    if (!relayAvailable) throw new Error("relay temporarily unavailable");
+    published.push(event);
+  });
+  globalThis.fetch = async () => {
+    assert.fail("the graph proposal must wait for relay delivery");
+  };
+
+  const result = await publishTrustVouch({
+    channelId: CHANNEL_ID,
+    subjectPubkey: subject,
+    subjectName: "Alice",
+    note: "Reviewed the release.",
+  });
+  assert.equal(result.state, "projection_pending");
+  const [queued] = JSON.parse(
+    storage.get("buzz-dkg-trust-projections.v1") ?? "[]",
+  );
+  assert.equal(queued.sourcePublished, false);
+  assert.deepEqual(queued.sourceEvent, signed[0]);
+
+  relayAvailable = true;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ state: "stored" }));
+  assert.deepEqual(await retryPendingTrustProjections(CHANNEL_ID), {
+    completed: 1,
+    remaining: 0,
+  });
+  assert.deepEqual(published, [signed[0]]);
 });

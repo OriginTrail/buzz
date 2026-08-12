@@ -1,20 +1,29 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   CheckCircle2,
+  History,
   Link2,
   Loader2,
   ShieldCheck,
+  ShieldX,
   UserRoundCheck,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { Badge } from "@/shared/ui/badge";
 import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
+import { Checkbox } from "@/shared/ui/checkbox";
 import { Textarea } from "@/shared/ui/textarea";
 import { truncatePubkey } from "@/shared/lib/pubkey";
-import { publishTrustVouch, type ReputationSummary } from "../api";
+import {
+  publishTrustVouch,
+  retryPendingTrustProjections,
+  revokeTrustVouch,
+  type ReputationSummary,
+  type WorkEvidence,
+} from "../api";
 import {
   useProfileNames,
   useReputationSummary,
@@ -33,6 +42,11 @@ function sourceId(uri: string | null): string | null {
   return uri.startsWith("urn:nostr:event:")
     ? uri.slice("urn:nostr:event:".length)
     : uri;
+}
+
+function evidenceLabel(evidence: WorkEvidence): string {
+  const kind = evidence.kind.split(/[/#]/).at(-1) ?? "Evidence";
+  return evidence.name ? `${evidence.name} · ${kind}` : kind;
 }
 
 export function WebOfTrustPanel({
@@ -81,6 +95,7 @@ export function WebOfTrustPanel({
   }, [members.data, names.data]);
   const [selected, setSelected] = useState<string | null>(null);
   const [note, setNote] = useState("");
+  const [selectedEvidence, setSelectedEvidence] = useState<string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const activePubkey = selected ?? people[0]?.pubkey ?? null;
   const activePerson = people.find((person) => person.pubkey === activePubkey);
@@ -91,6 +106,36 @@ export function WebOfTrustPanel({
   const received = (network.data?.vouches ?? []).filter(
     (vouch) => vouch.subject === activePubkey && vouch.status === "active",
   );
+  const historical = (network.data?.vouches ?? []).filter(
+    (vouch) => vouch.subject === activePubkey && vouch.status !== "active",
+  );
+  const ownActive = received.find(
+    (vouch) =>
+      vouch.issuer === identity.data?.pubkey?.toLowerCase() &&
+      sourceId(vouch.sourceEvent),
+  );
+  const workEvidence = reputation.data?.workEvidence ?? [];
+
+  useEffect(() => {
+    let active = true;
+    void retryPendingTrustProjections(channelId).then((result) => {
+      if (!active || result.completed === 0) return;
+      setNotice(
+        result.remaining > 0
+          ? `${result.completed} pending trust update${result.completed === 1 ? "" : "s"} recovered; ${result.remaining} still waiting.`
+          : `${result.completed} pending trust update${result.completed === 1 ? "" : "s"} recovered.`,
+      );
+      void queryClient.invalidateQueries({
+        queryKey: ["dkg-memory", "trust-network", channelId],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["dkg-memory", "reputation-summary", channelId],
+      });
+    });
+    return () => {
+      active = false;
+    };
+  }, [channelId, queryClient]);
 
   const publish = useMutation({
     mutationFn: () =>
@@ -101,13 +146,42 @@ export function WebOfTrustPanel({
           ? labelFor(activePubkey, displayNames)
           : "community member",
         note,
+        evidence: workEvidence.filter((item) =>
+          selectedEvidence.includes(item.uri),
+        ),
+        supersedesEventId: ownActive ? sourceId(ownActive.sourceEvent) : null,
       }),
     onSuccess: async (result) => {
       setNote("");
+      setSelectedEvidence([]);
       setNotice(
-        result.state === "processing"
-          ? "Signed vouch accepted. The Context Graph is still updating."
-          : "Signed vouch stored with its source evidence.",
+        result.state === "projection_pending"
+          ? "Your signed vouch is safely queued. Relay delivery and its graph update will retry when this panel opens."
+          : result.state === "processing"
+            ? "Signed vouch accepted. The Context Graph is still updating."
+            : "Signed vouch stored with its source evidence.",
+      );
+      await queryClient.invalidateQueries({
+        queryKey: ["dkg-memory", "trust-network", channelId],
+      });
+      await queryClient.invalidateQueries({
+        queryKey: ["dkg-memory", "reputation-summary", channelId],
+      });
+    },
+  });
+
+  const revoke = useMutation({
+    mutationFn: () =>
+      revokeTrustVouch({
+        channelId,
+        subjectPubkey: activePubkey ?? "",
+        targetEventId: ownActive ? (sourceId(ownActive.sourceEvent) ?? "") : "",
+      }),
+    onSuccess: async (result) => {
+      setNotice(
+        result.state === "projection_pending"
+          ? "Your signed revocation is safely queued for relay and graph retry."
+          : "Your signed vouch was revoked. Its history remains inspectable.",
       );
       await queryClient.invalidateQueries({
         queryKey: ["dkg-memory", "trust-network", channelId],
@@ -186,6 +260,7 @@ export function WebOfTrustPanel({
               size="xs"
               onClick={() => {
                 setSelected(person.pubkey);
+                setSelectedEvidence([]);
                 setNotice(null);
               }}
               data-testid={`trust-person-${person.pubkey}`}
@@ -275,6 +350,17 @@ export function WebOfTrustPanel({
                           </span>
                         )}
                       </div>
+                      {(vouch.evidence ?? []).length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {(vouch.evidence ?? []).map((uri) => (
+                            <Badge key={uri} variant="secondary" title={uri}>
+                              <Link2 className="mr-1 h-3 w-3" />
+                              {uri.split(/[/#]/).at(-1)?.slice(0, 24) ??
+                                "evidence"}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -282,9 +368,71 @@ export function WebOfTrustPanel({
             )}
           </div>
 
+          {historical.length > 0 && (
+            <details className="rounded-lg border border-border/70 bg-muted/10 p-2.5">
+              <summary className="flex cursor-pointer items-center gap-1.5 text-2xs font-medium">
+                <History className="h-3.5 w-3.5 text-muted-foreground" />
+                Vouch history ({historical.length})
+              </summary>
+              <div className="mt-2 space-y-1.5">
+                {historical.map((vouch) => (
+                  <div
+                    key={vouch.uri}
+                    className="rounded-md border border-border/50 p-2 text-3xs text-muted-foreground"
+                  >
+                    <span className="font-medium text-foreground">
+                      {vouch.status}
+                    </span>{" "}
+                    · by {labelFor(vouch.issuer, displayNames)} ·{" "}
+                    {vouch.note ?? "Signed community vouch"}
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+
           {identity.data?.pubkey?.toLowerCase() !== activePubkey && (
             <div className="border-t border-border/70 pt-3">
-              <p className="text-xs font-medium">Add your signed vouch</p>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-xs font-medium">
+                    {ownActive
+                      ? "Update your signed vouch"
+                      : "Add your signed vouch"}
+                  </p>
+                  {ownActive && (
+                    <p className="mt-0.5 text-3xs text-muted-foreground">
+                      The previous version will remain in history as superseded.
+                    </p>
+                  )}
+                </div>
+                {ownActive && (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    disabled={revoke.isPending}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          "Revoke your current vouch? The signed history will remain visible.",
+                        )
+                      ) {
+                        setNotice(null);
+                        revoke.mutate();
+                      }
+                    }}
+                    data-testid="trust-vouch-revoke"
+                  >
+                    {revoke.isPending ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <ShieldX className="h-3.5 w-3.5" />
+                    )}
+                    Revoke
+                  </Button>
+                )}
+              </div>
               <p className="mt-0.5 text-2xs text-muted-foreground">
                 Describe something you directly observed. This becomes the
                 public explanation attached to your signature.
@@ -297,6 +445,53 @@ export function WebOfTrustPanel({
                 placeholder="For example: reviewed two releases carefully and caught a rollback edge case."
                 data-testid="trust-vouch-note"
               />
+              {workEvidence.length > 0 && (
+                <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 p-2.5">
+                  <p className="text-2xs font-medium">Attach observed work</p>
+                  <p className="mt-0.5 text-3xs text-muted-foreground">
+                    Optional. Select up to 8 records; their graph URIs are
+                    included in your signature.
+                  </p>
+                  <div className="mt-2 max-h-36 space-y-2 overflow-y-auto pr-1">
+                    {workEvidence.map((item, index) => {
+                      const checked = selectedEvidence.includes(item.uri);
+                      const disabled = !checked && selectedEvidence.length >= 8;
+                      const controlId = `trust-evidence-${index}`;
+                      return (
+                        <label
+                          key={item.uri}
+                          htmlFor={controlId}
+                          className="flex cursor-pointer items-start gap-2 rounded-md p-1.5 hover:bg-muted/60"
+                        >
+                          <Checkbox
+                            id={controlId}
+                            className="mt-0.5"
+                            checked={checked}
+                            disabled={disabled}
+                            onCheckedChange={(next) => {
+                              setSelectedEvidence((current) =>
+                                next
+                                  ? [...current, item.uri].slice(0, 8)
+                                  : current.filter((uri) => uri !== item.uri),
+                              );
+                            }}
+                          />
+                          <span className="min-w-0">
+                            <span className="block truncate text-2xs">
+                              {evidenceLabel(item)}
+                            </span>
+                            <span className="block text-3xs text-muted-foreground">
+                              {item.layer === "VM"
+                                ? "Anchored"
+                                : "Channel memory"}
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               <div className="mt-2 flex items-center justify-between gap-2">
                 <span className="text-3xs text-muted-foreground">
                   {note.length}/1,000
@@ -316,7 +511,7 @@ export function WebOfTrustPanel({
                   ) : (
                     <UserRoundCheck className="h-3.5 w-3.5" />
                   )}
-                  Sign vouch
+                  {ownActive ? "Sign replacement" : "Sign vouch"}
                 </Button>
               </div>
               {publish.isError && (
@@ -324,6 +519,13 @@ export function WebOfTrustPanel({
                   {publish.error instanceof Error
                     ? publish.error.message
                     : "The vouch could not be recorded."}
+                </p>
+              )}
+              {revoke.isError && (
+                <p className="mt-2 text-2xs text-destructive">
+                  {revoke.error instanceof Error
+                    ? revoke.error.message
+                    : "The vouch could not be revoked."}
                 </p>
               )}
               {notice && (
@@ -412,7 +614,9 @@ function ReputationCard({
             </span>
           </div>
           <div className="mt-1 flex justify-end gap-1">
-            <Badge variant={confidenceVariant}>{data.confidence} confidence</Badge>
+            <Badge variant={confidenceVariant}>
+              {data.confidence} confidence
+            </Badge>
             {data.completeness === "partial" ? (
               <Badge variant="warning">bounded sample</Badge>
             ) : null}
