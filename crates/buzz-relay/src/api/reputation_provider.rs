@@ -274,7 +274,11 @@ fn resolution_from_gateway(value: &Value) -> ResolutionState {
         .and_then(Value::as_str)
     {
         Some("partial") => ResolutionState::Partial,
-        _ => ResolutionState::Complete,
+        Some("complete") => ResolutionState::Complete,
+        // Absence or an unknown future value cannot safely be promoted to a
+        // complete evidence result. Older adapters remain usable, but callers
+        // see the conservative partial state.
+        _ => ResolutionState::Partial,
     }
 }
 
@@ -310,6 +314,10 @@ mod tests {
             resolution_from_gateway(&serde_json::json!({
                 "result": {"completeness": "partial"}
             })),
+            ResolutionState::Partial
+        );
+        assert_eq!(
+            resolution_from_gateway(&serde_json::json!({"result": {}})),
             ResolutionState::Partial
         );
     }
