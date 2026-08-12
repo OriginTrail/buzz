@@ -7,6 +7,26 @@ const NIP98_KIND = 27235;
 
 export type ExplorerSource = "local" | "gateway";
 
+export type ReputationResolution =
+  | "disabled"
+  | "complete"
+  | "partial"
+  | "unavailable";
+
+export interface ReputationSourceDiagnostic {
+  sourceId: string;
+  resolution: ReputationResolution;
+  detail?: string;
+}
+
+export interface ReputationProviderMetadata {
+  resolution: ReputationResolution;
+  providerId: string;
+  providerVersion: string;
+  asOf: string;
+  sourceDiagnostics: ReputationSourceDiagnostic[];
+}
+
 export type DkgQueryOperation =
   | "channel_memory"
   | "contributor_trail"
@@ -57,7 +77,7 @@ type CommunityGatewayEnvelope = {
   cg: string;
   operation: DkgQueryOperation;
   result: unknown;
-};
+} & Partial<ReputationProviderMetadata>;
 
 type AuthenticatedDkgPost = {
   path: `/api/dkg/${string}`;
@@ -240,6 +260,46 @@ function validateEnvelope<Operation extends DkgQueryOperation>(
   return value as CommunityGatewayEnvelope & { operation: Operation };
 }
 
+function reputationProviderMetadata(
+  envelope: CommunityGatewayEnvelope,
+): Partial<ReputationProviderMetadata> {
+  if (envelope.resolution === undefined) return {};
+  const resolutions = new Set<ReputationResolution>([
+    "disabled",
+    "complete",
+    "partial",
+    "unavailable",
+  ]);
+  if (
+    !resolutions.has(envelope.resolution) ||
+    typeof envelope.providerId !== "string" ||
+    typeof envelope.providerVersion !== "string" ||
+    typeof envelope.asOf !== "string" ||
+    !Array.isArray(envelope.sourceDiagnostics)
+  ) {
+    throw protocolError("invalid reputation-provider metadata");
+  }
+  for (const diagnostic of envelope.sourceDiagnostics) {
+    if (
+      !isRecord(diagnostic) ||
+      typeof diagnostic.sourceId !== "string" ||
+      typeof diagnostic.resolution !== "string" ||
+      !resolutions.has(diagnostic.resolution as ReputationResolution) ||
+      (diagnostic.detail !== undefined && typeof diagnostic.detail !== "string")
+    ) {
+      throw protocolError("invalid reputation source diagnostic");
+    }
+  }
+  return {
+    resolution: envelope.resolution,
+    providerId: envelope.providerId,
+    providerVersion: envelope.providerVersion,
+    asOf: envelope.asOf,
+    sourceDiagnostics:
+      envelope.sourceDiagnostics as ReputationSourceDiagnostic[],
+  };
+}
+
 function adaptCommunityResult<Operation extends DkgQueryOperation>(
   envelope: CommunityGatewayEnvelope & { operation: Operation },
 ): unknown {
@@ -265,7 +325,12 @@ function adaptCommunityResult<Operation extends DkgQueryOperation>(
     case "subgraph_graph":
     case "subgraph_triples":
     case "semantic_query":
-      return { ...envelope.result, gate: "ok", cg: envelope.cg };
+      return {
+        ...envelope.result,
+        ...reputationProviderMetadata(envelope),
+        gate: "ok",
+        cg: envelope.cg,
+      };
     case "evidence":
       return { ...envelope.result, gate: "ok" };
     default:

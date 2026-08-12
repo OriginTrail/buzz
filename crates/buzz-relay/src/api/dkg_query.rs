@@ -23,7 +23,10 @@ use buzz_core::TenantContext;
 
 use crate::state::AppState;
 
-use super::{api_error, bridge, internal_error, not_found};
+use super::{
+    api_error, bridge, internal_error, not_found,
+    reputation_provider::{ConfiguredReputationProvider, ReputationProvider},
+};
 
 /// Maximum public request body accepted by `/api/dkg/query`.
 pub(crate) const MAX_REQUEST_BYTES: usize = 16 * 1024;
@@ -412,15 +415,19 @@ pub async fn query(
     .await?;
 
     let forward = parse_and_sanitize_request(&body, &requester)?;
+    enforce_authoritative_channel_read(&state, &tenant, forward.channel_id, &requester_bytes)
+        .await?;
+
     if matches!(
         forward.operation,
         Operation::TrustNetwork | Operation::ReputationSummary
-    ) && !config.trust_enabled
-    {
-        return Err(not_found("not found"));
+    ) {
+        let request = serde_json::to_value(&forward)
+            .map_err(|_| internal_error("serializing reputation-provider request"))?;
+        let provider =
+            ConfiguredReputationProvider::from_dkg_config(state.config.dkg_query.as_ref());
+        return provider.attestations(&request).await.into_http_result();
     }
-    enforce_authoritative_channel_read(&state, &tenant, forward.channel_id, &requester_bytes)
-        .await?;
 
     let client = HTTP_CLIENT
         .as_ref()

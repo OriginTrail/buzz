@@ -4727,19 +4727,32 @@ impl Db {
 
         // Check for the newest existing event. ORDER BY + LIMIT 1 is defensive against
         // historical data where prior bugs may have left multiple live rows.
-        let existing: Option<(chrono::DateTime<chrono::Utc>, Vec<u8>)> = sqlx::query_as(
+        // A NIP-09 delete must not let a previously superseded provider list
+        // become live again when an old signed event is replayed. Keep the
+        // latest soft-deleted kind:10040 row as an ordering fence. Other
+        // replaceable kinds retain their historical live-head behavior.
+        let preserve_deleted_ordering_fence =
+            kind_i32 == buzz_core::kind::KIND_TRUST_PROVIDER_LIST as i32;
+        let existing_sql = if preserve_deleted_ordering_fence {
+            "SELECT created_at, id FROM events \
+             WHERE community_id = $1 AND kind = $2 AND pubkey = $3 \
+             AND channel_id IS NOT DISTINCT FROM $4 \
+             ORDER BY created_at DESC, id ASC LIMIT 1"
+        } else {
             "SELECT created_at, id FROM events \
              WHERE community_id = $1 AND kind = $2 AND pubkey = $3 \
              AND channel_id IS NOT DISTINCT FROM $4 \
              AND deleted_at IS NULL \
-             ORDER BY created_at DESC, id ASC LIMIT 1",
-        )
-        .bind(community_id.as_uuid())
-        .bind(kind_i32)
-        .bind(pubkey_bytes.as_slice())
-        .bind(channel_id)
-        .fetch_optional(&mut *tx)
-        .await?;
+             ORDER BY created_at DESC, id ASC LIMIT 1"
+        };
+        let existing: Option<(chrono::DateTime<chrono::Utc>, Vec<u8>)> =
+            sqlx::query_as(existing_sql)
+                .bind(community_id.as_uuid())
+                .bind(kind_i32)
+                .bind(pubkey_bytes.as_slice())
+                .bind(channel_id)
+                .fetch_optional(&mut *tx)
+                .await?;
 
         // Stale-write protection: reject if incoming is not newer.
         // NIP-16: created_at is second-resolution. On same-second tie, lowest
@@ -5089,17 +5102,28 @@ impl Db {
         // Check the live head and, for NIP-RS, the compact historical ordering
         // watermark. The watermark remains after a NIP-09 coordinate deletion,
         // preventing a previously accepted signed blob from being resurrected.
-        let existing: Option<(chrono::DateTime<chrono::Utc>, Vec<u8>)> = sqlx::query_as(
+        // The trusted-assertion coordinate keeps its most recent soft-deleted
+        // version as an ordering fence. Otherwise a delayed, superseded
+        // kind:30382 event could resurrect after NIP-09 deletion.
+        let preserve_deleted_ordering_fence =
+            kind_i32 == buzz_core::kind::KIND_USER_TRUSTED_ASSERTION as i32;
+        let existing_sql = if preserve_deleted_ordering_fence {
+            "SELECT created_at, id FROM events \
+             WHERE community_id = $1 AND kind = $2 AND pubkey = $3 AND d_tag = $4 \
+             ORDER BY created_at DESC, id ASC LIMIT 1"
+        } else {
             "SELECT created_at, id FROM events \
              WHERE community_id = $1 AND kind = $2 AND pubkey = $3 AND d_tag = $4 AND deleted_at IS NULL \
-             ORDER BY created_at DESC, id ASC LIMIT 1",
-        )
-        .bind(community_id.as_uuid())
-        .bind(kind_i32)
-        .bind(pubkey_bytes.as_slice())
-        .bind(d_tag)
-        .fetch_optional(&mut *tx)
-        .await?;
+             ORDER BY created_at DESC, id ASC LIMIT 1"
+        };
+        let existing: Option<(chrono::DateTime<chrono::Utc>, Vec<u8>)> =
+            sqlx::query_as(existing_sql)
+                .bind(community_id.as_uuid())
+                .bind(kind_i32)
+                .bind(pubkey_bytes.as_slice())
+                .bind(d_tag)
+                .fetch_optional(&mut *tx)
+                .await?;
         let watermark: Option<(chrono::DateTime<chrono::Utc>, Vec<u8>)> = if is_nip_rs {
             sqlx::query_as(
                 "SELECT created_at, event_id FROM parameterized_event_watermarks \
@@ -5349,6 +5373,348 @@ mod tests {
             .await
             .expect("insert community");
         id
+    }
+
+    fn event_at(
+        keys: &nostr::Keys,
+        kind: u32,
+        content: &str,
+        tags: Vec<nostr::Tag>,
+        created_at: u64,
+    ) -> nostr::Event {
+        nostr::EventBuilder::new(nostr::Kind::Custom(kind as u16), content)
+            .tags(tags)
+            .custom_created_at(nostr::Timestamp::from(created_at))
+            .sign_with_keys(keys)
+            .expect("sign lifecycle event")
+    }
+
+    async fn query_wot_events(
+        db: &Db,
+        community: CommunityId,
+        kind: u32,
+        author: &nostr::Keys,
+        d_tag: Option<&str>,
+    ) -> Vec<nostr::Event> {
+        db.query_events(&crate::event::EventQuery {
+            kinds: Some(vec![kind as i32]),
+            pubkey: Some(author.public_key().to_bytes().to_vec()),
+            d_tag: d_tag.map(str::to_owned),
+            global_only: true,
+            limit: Some(20),
+            ..crate::event::EventQuery::for_community(community)
+        })
+        .await
+        .expect("query Web of Trust events")
+        .into_iter()
+        .map(|stored| stored.event)
+        .collect()
+    }
+
+    /// Persistence/query acceptance matrix for the three Web-of-Trust kinds.
+    ///
+    /// This is selected explicitly by the Postgres-backed CI job. It proves
+    /// accumulation for regular labels, latest-wins ordering for replaceable
+    /// source lists and parameterized assertions, deterministic equal-time
+    /// ties, coordinate/author isolation, deletion visibility, and protection
+    /// against stale resurrection after deletion.
+    #[tokio::test]
+    #[ignore = "requires Postgres"]
+    async fn web_of_trust_event_lifecycles_persist_and_query_exactly() {
+        use buzz_core::kind::{KIND_LABEL, KIND_TRUST_PROVIDER_LIST, KIND_USER_TRUSTED_ASSERTION};
+        use nostr::{Keys, Tag};
+
+        let db = setup_db().await;
+        let community = CommunityId::from_uuid(make_community(&db.pool).await);
+        let base = nostr::Timestamp::now().as_secs().saturating_sub(1_000);
+
+        // kind:1985 is regular: independent vouches accumulate, then deletion
+        // hides exactly the selected event without affecting its sibling.
+        let label_author = Keys::generate();
+        let subject = Keys::generate().public_key().to_hex();
+        let label_tags = vec![
+            Tag::parse(["L", "buzz.wot"]).expect("namespace tag"),
+            Tag::parse(["l", "vouch", "buzz.wot"]).expect("label tag"),
+            Tag::parse(["p", subject.as_str()]).expect("subject tag"),
+        ];
+        let label_a = event_at(
+            &label_author,
+            KIND_LABEL,
+            "reviewed the parser",
+            label_tags.clone(),
+            base + 1,
+        );
+        let label_b = event_at(
+            &label_author,
+            KIND_LABEL,
+            "validated the release",
+            label_tags,
+            base + 2,
+        );
+        for event in [&label_a, &label_b] {
+            assert!(
+                db.insert_event(community, event, None)
+                    .await
+                    .expect("store label")
+                    .1
+            );
+        }
+        let labels = query_wot_events(&db, community, KIND_LABEL, &label_author, None).await;
+        assert_eq!(labels.len(), 2, "regular labels must accumulate");
+        assert!(db
+            .soft_delete_event(community, label_a.id.as_bytes())
+            .await
+            .expect("delete one label"));
+        let labels = query_wot_events(&db, community, KIND_LABEL, &label_author, None).await;
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].id, label_b.id);
+
+        // kind:10040 is replaceable per author. Older arrivals lose; equal
+        // timestamps use the lowest event id; a second author is isolated.
+        let source_author = Keys::generate();
+        let source_old = event_at(
+            &source_author,
+            KIND_TRUST_PROVIDER_LIST,
+            "old sources",
+            vec![],
+            base + 10,
+        );
+        let source_new = event_at(
+            &source_author,
+            KIND_TRUST_PROVIDER_LIST,
+            "new sources",
+            vec![],
+            base + 20,
+        );
+        assert!(
+            db.replace_addressable_event(community, &source_new, None)
+                .await
+                .expect("store new source list")
+                .1
+        );
+        assert!(
+            !db.replace_addressable_event(community, &source_old, None)
+                .await
+                .expect("reject stale source list")
+                .1
+        );
+        let tie_a = event_at(
+            &source_author,
+            KIND_TRUST_PROVIDER_LIST,
+            "tie a",
+            vec![],
+            base + 30,
+        );
+        let tie_b = event_at(
+            &source_author,
+            KIND_TRUST_PROVIDER_LIST,
+            "tie b",
+            vec![],
+            base + 30,
+        );
+        let (tie_winner, tie_loser) = if tie_a.id < tie_b.id {
+            (&tie_a, &tie_b)
+        } else {
+            (&tie_b, &tie_a)
+        };
+        assert!(
+            db.replace_addressable_event(community, tie_loser, None)
+                .await
+                .expect("store first tie")
+                .1
+        );
+        assert!(
+            db.replace_addressable_event(community, tie_winner, None)
+                .await
+                .expect("lower id wins tie")
+                .1
+        );
+        assert!(
+            !db.replace_addressable_event(community, tie_loser, None)
+                .await
+                .expect("higher id stays stale")
+                .1
+        );
+        let other_source_author = Keys::generate();
+        let other_source = event_at(
+            &other_source_author,
+            KIND_TRUST_PROVIDER_LIST,
+            "other author's sources",
+            vec![],
+            base + 25,
+        );
+        assert!(
+            db.replace_addressable_event(community, &other_source, None)
+                .await
+                .expect("store isolated author")
+                .1
+        );
+        let sources = query_wot_events(
+            &db,
+            community,
+            KIND_TRUST_PROVIDER_LIST,
+            &source_author,
+            None,
+        )
+        .await;
+        assert_eq!(
+            sources.iter().map(|event| event.id).collect::<Vec<_>>(),
+            vec![tie_winner.id]
+        );
+        assert!(db
+            .soft_delete_event(community, tie_winner.id.as_bytes())
+            .await
+            .expect("delete source head"));
+        assert!(
+            !db.replace_addressable_event(community, tie_loser, None)
+                .await
+                .expect("deleted head fences stale replay")
+                .1
+        );
+        assert!(query_wot_events(
+            &db,
+            community,
+            KIND_TRUST_PROVIDER_LIST,
+            &source_author,
+            None,
+        )
+        .await
+        .is_empty());
+        assert_eq!(
+            query_wot_events(
+                &db,
+                community,
+                KIND_TRUST_PROVIDER_LIST,
+                &other_source_author,
+                None,
+            )
+            .await
+            .len(),
+            1,
+            "author deletion must remain isolated"
+        );
+
+        // kind:30382 is parameterized-replaceable per (author, subject d tag).
+        let assertion_author = Keys::generate();
+        let subject_a = Keys::generate().public_key().to_hex();
+        let subject_b = Keys::generate().public_key().to_hex();
+        let assertion_old = event_at(
+            &assertion_author,
+            KIND_USER_TRUSTED_ASSERTION,
+            "old assertion",
+            vec![Tag::parse(["d", subject_a.as_str()]).expect("subject a")],
+            base + 40,
+        );
+        let assertion_new = event_at(
+            &assertion_author,
+            KIND_USER_TRUSTED_ASSERTION,
+            "new assertion",
+            vec![Tag::parse(["d", subject_a.as_str()]).expect("subject a")],
+            base + 50,
+        );
+        assert!(
+            db.replace_parameterized_event(community, &assertion_new, &subject_a, None)
+                .await
+                .expect("store new assertion")
+                .1
+        );
+        assert!(
+            !db.replace_parameterized_event(community, &assertion_old, &subject_a, None)
+                .await
+                .expect("reject stale assertion")
+                .1
+        );
+        let assertion_b = event_at(
+            &assertion_author,
+            KIND_USER_TRUSTED_ASSERTION,
+            "subject b assertion",
+            vec![Tag::parse(["d", subject_b.as_str()]).expect("subject b")],
+            base + 45,
+        );
+        assert!(
+            db.replace_parameterized_event(community, &assertion_b, &subject_b, None)
+                .await
+                .expect("store isolated subject")
+                .1
+        );
+        let assertion_tie_a = event_at(
+            &assertion_author,
+            KIND_USER_TRUSTED_ASSERTION,
+            "assertion tie a",
+            vec![Tag::parse(["d", subject_a.as_str()]).expect("subject a")],
+            base + 60,
+        );
+        let assertion_tie_b = event_at(
+            &assertion_author,
+            KIND_USER_TRUSTED_ASSERTION,
+            "assertion tie b",
+            vec![Tag::parse(["d", subject_a.as_str()]).expect("subject a")],
+            base + 60,
+        );
+        let (assertion_winner, assertion_loser) = if assertion_tie_a.id < assertion_tie_b.id {
+            (&assertion_tie_a, &assertion_tie_b)
+        } else {
+            (&assertion_tie_b, &assertion_tie_a)
+        };
+        assert!(
+            db.replace_parameterized_event(community, assertion_loser, &subject_a, None)
+                .await
+                .expect("store assertion tie")
+                .1
+        );
+        assert!(
+            db.replace_parameterized_event(community, assertion_winner, &subject_a, None)
+                .await
+                .expect("lower assertion id wins")
+                .1
+        );
+        let assertions_a = query_wot_events(
+            &db,
+            community,
+            KIND_USER_TRUSTED_ASSERTION,
+            &assertion_author,
+            Some(&subject_a),
+        )
+        .await;
+        assert_eq!(
+            assertions_a
+                .iter()
+                .map(|event| event.id)
+                .collect::<Vec<_>>(),
+            vec![assertion_winner.id]
+        );
+        assert_eq!(
+            query_wot_events(
+                &db,
+                community,
+                KIND_USER_TRUSTED_ASSERTION,
+                &assertion_author,
+                Some(&subject_b),
+            )
+            .await
+            .len(),
+            1,
+            "d-tag coordinates must remain isolated"
+        );
+        assert!(db
+            .soft_delete_event(community, assertion_winner.id.as_bytes())
+            .await
+            .expect("delete assertion head"));
+        assert!(
+            !db.replace_parameterized_event(community, assertion_loser, &subject_a, None)
+                .await
+                .expect("deleted assertion fences stale replay")
+                .1
+        );
+        assert!(query_wot_events(
+            &db,
+            community,
+            KIND_USER_TRUSTED_ASSERTION,
+            &assertion_author,
+            Some(&subject_a),
+        )
+        .await
+        .is_empty());
     }
 
     #[tokio::test]

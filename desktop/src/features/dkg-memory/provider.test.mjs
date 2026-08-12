@@ -427,6 +427,16 @@ test("web of trust uses a fixed channel-scoped operation, never client SPARQL", 
         channelId: body.channelId,
         cg: "server-cg",
         operation: body.operation,
+        resolution: "complete",
+        providerId: "origintrail-dkg",
+        providerVersion: "dkg-trust@1",
+        asOf: "2026-08-12T10:00:00Z",
+        sourceDiagnostics: [
+          {
+            sourceId: "origintrail-dkg",
+            resolution: "complete",
+          },
+        ],
         result: {
           completeness: "complete",
           people: [
@@ -454,6 +464,9 @@ test("web of trust uses a fixed channel-scoped operation, never client SPARQL", 
   assert.equal(JSON.stringify(body).includes("sparql"), false);
   assert.equal(result.gate, "ok");
   assert.equal(result.cg, "server-cg");
+  assert.equal(result.resolution, "complete");
+  assert.equal(result.providerId, "origintrail-dkg");
+  assert.equal(result.sourceDiagnostics[0].resolution, "complete");
   assert.equal(result.people[0].contributions, 3);
 });
 
