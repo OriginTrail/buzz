@@ -4315,7 +4315,7 @@ mod dkg_memory_prompt_tests {
         assert!(prompt.contains("canonical HTTPS repository URL"));
         assert!(prompt.contains("names are labels, never identity"));
         assert!(prompt.contains("agent-memory-v2"));
-        assert!(prompt.contains(r#"\"subject\":\"decision-1\""#));
+        assert!(prompt.contains(r#""subject":"decision-1""#));
         assert!(prompt.contains("Never use `from`/`to`"));
         assert!(prompt.contains("only `state: \"stored\"` confirms completion"));
         assert!(prompt.contains("never hidden reasoning"));
