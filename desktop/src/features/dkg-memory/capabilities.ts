@@ -11,6 +11,7 @@ export type DkgMemoryCapabilities = {
 
 type RelayCapabilityDocument = {
   dkg_memory?: unknown;
+  reputation?: unknown;
   supported_extensions?: unknown;
 };
 
@@ -51,6 +52,22 @@ export function parseDkgMemoryCapabilities(
           semantic_query?: unknown;
         })
       : null;
+  const reputationDescriptor =
+    capability.reputation && typeof capability.reputation === "object"
+      ? (capability.reputation as {
+          contract?: unknown;
+          claim_schema?: unknown;
+          operations?: unknown;
+        })
+      : null;
+  const providerContract =
+    hasString(
+      capability.supported_extensions,
+      capabilityContract.provider.extension,
+    ) &&
+    reputationDescriptor?.contract === capabilityContract.provider.contract &&
+    reputationDescriptor?.claim_schema ===
+      capabilityContract.provider.claim_schema;
   const descriptorSupportsV2 =
     supportsV2 &&
     Array.isArray(descriptor?.schema_versions) &&
@@ -77,15 +94,28 @@ export function parseDkgMemoryCapabilities(
       hasString(semanticDescriptor?.forms, form),
     );
   const trust =
-    memory &&
-    hasString(descriptor?.profiles, capabilityContract.trust.profile) &&
-    hasString(descriptor?.query_operations, capabilityContract.trust.operation);
+    (memory &&
+      hasString(descriptor?.profiles, capabilityContract.trust.profile) &&
+      hasString(
+        descriptor?.query_operations,
+        capabilityContract.trust.operation,
+      )) ||
+    (providerContract &&
+      hasString(
+        reputationDescriptor?.operations,
+        capabilityContract.trust.operation,
+      ));
   const reputation =
     trust &&
-    hasString(
+    (hasString(
       descriptor?.query_operations,
       capabilityContract.reputation.operation,
-    );
+    ) ||
+      (providerContract &&
+        hasString(
+          reputationDescriptor?.operations,
+          capabilityContract.reputation.operation,
+        )));
   return {
     memory,
     semanticQuery,

@@ -17,6 +17,7 @@ import {
   MemoryProvisioningGate,
 } from "./MemoryPanelStates";
 import { resolveMemoryPanelState } from "./memoryPanelState";
+import { WebOfTrustPanel } from "./WebOfTrustPanel";
 
 export function MemoryPanel({ channelId }: { channelId: string }) {
   const queryClient = useQueryClient();
@@ -26,7 +27,7 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
   const memory = useChannelMemory(
     channelId,
     localCgOverride,
-    !cgQuery.isLoading,
+    !cgQuery.isLoading && capabilities.data?.memory !== false,
   );
   const cg = memory.data?.cg ?? localCgOverride;
   const [enabling, setEnabling] = useState(false);
@@ -42,6 +43,28 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
     channelId,
     panelState.kind === "fallback",
   );
+
+  if (capabilities.isLoading) {
+    return (
+      <PanelShell>
+        <MemoryLoading />
+      </PanelShell>
+    );
+  }
+
+  if (capabilities.data?.trust && !capabilities.data.memory) {
+    return (
+      <PanelShell
+        title="Community trust"
+        subtitle="Signed evidence from this Buzz relay"
+      >
+        <WebOfTrustPanel
+          channelId={channelId}
+          reputationAvailable={capabilities.data.reputation}
+        />
+      </PanelShell>
+    );
+  }
 
   async function startMemory() {
     setEnabling(true);
@@ -130,9 +153,13 @@ export function MemoryPanel({ channelId }: { channelId: string }) {
 function PanelShell({
   action,
   children,
+  title = "Channel memory",
+  subtitle = "Powered by OriginTrail DKG",
 }: {
   action?: React.ReactNode;
   children: React.ReactNode;
+  title?: string;
+  subtitle?: string;
 }) {
   return (
     <div className="flex h-full flex-col overflow-y-auto p-4">
@@ -141,10 +168,8 @@ function PanelShell({
           <BrainCircuit className="h-4 w-4" />
         </div>
         <div className="min-w-0 flex-1">
-          <h3 className="text-sm font-semibold">Channel memory</h3>
-          <p className="text-3xs text-muted-foreground">
-            Powered by OriginTrail DKG
-          </p>
+          <h3 className="text-sm font-semibold">{title}</h3>
+          <p className="text-3xs text-muted-foreground">{subtitle}</p>
         </div>
         {action}
       </div>

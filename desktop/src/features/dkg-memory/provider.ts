@@ -52,7 +52,12 @@ type DkgQueryArguments = {
     commitSha: string;
     componentName: string;
   };
-  trust_network: Record<string, never>;
+  trust_network: {
+    limit?: number;
+    cursor?: string;
+    since?: number;
+    until?: number;
+  };
   reputation_summary: { pubkey: string };
   subgraph_graph: { name: string };
   subgraph_triples: { name: string };

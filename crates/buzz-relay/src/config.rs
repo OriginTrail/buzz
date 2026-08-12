@@ -72,6 +72,21 @@ pub struct DkgQueryConfig {
     pub trust_enabled: bool,
 }
 
+/// Reputation evidence backend exposed by the authenticated relay query API.
+///
+/// `Disabled` is the safe default for a plain Buzz relay. Existing deployments
+/// that already enable the DKG trust profile retain that provider unless they
+/// explicitly choose the relay-local implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReputationProviderKind {
+    /// Do not expose reputation evidence queries.
+    Disabled,
+    /// Resolve signed NIP-32/NIP-85 evidence from this relay's event store.
+    Local,
+    /// Forward reputation operations to the configured OriginTrail DKG gateway.
+    Dkg,
+}
+
 impl std::fmt::Debug for DkgQueryConfig {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -312,8 +327,12 @@ pub struct Config {
     /// Hard timeout for one gateway delivery request.
     pub push_gateway_timeout: Duration,
 
-    /// Internal DKG read gateway. Absent means `/api/dkg/query` is not routed.
+    /// Internal DKG read gateway. When absent, `/api/dkg/query` is routed only
+    /// if the relay-local reputation provider is enabled.
     pub dkg_query: Option<DkgQueryConfig>,
+
+    /// Backend used for evidence-backed trust and reputation reads.
+    pub reputation_provider: ReputationProviderKind,
 
     /// Optional relay-hosted policy shown on join surfaces. Disabled when no
     /// documents or age attestation are configured.
@@ -531,6 +550,37 @@ fn parse_dkg_query_config(
         agent_memory_enabled,
         trust_enabled,
     }))
+}
+
+fn parse_reputation_provider(
+    raw: Option<String>,
+    dkg_query: Option<&DkgQueryConfig>,
+) -> Result<ReputationProviderKind, ConfigError> {
+    let configured = raw
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase);
+    let provider = match configured.as_deref() {
+        None if dkg_query.is_some_and(|config| config.trust_enabled) => ReputationProviderKind::Dkg,
+        None | Some("disabled" | "off" | "none") => ReputationProviderKind::Disabled,
+        Some("local") => ReputationProviderKind::Local,
+        Some("dkg") => ReputationProviderKind::Dkg,
+        Some(_) => {
+            return Err(ConfigError::InvalidValue(
+                "BUZZ_REPUTATION_PROVIDER must be disabled, local, or dkg".to_string(),
+            ));
+        }
+    };
+    if provider == ReputationProviderKind::Dkg
+        && !dkg_query.is_some_and(|config| config.trust_enabled)
+    {
+        return Err(ConfigError::InvalidValue(
+            "BUZZ_REPUTATION_PROVIDER=dkg requires a DKG query gateway with BUZZ_DKG_TRUST_ENABLED=true"
+                .to_string(),
+        ));
+    }
+    Ok(provider)
 }
 
 fn parse_bool(name: &str, default: bool) -> Result<bool, ConfigError> {
@@ -1037,6 +1087,10 @@ impl Config {
             parse_bool("BUZZ_DKG_MEMORY_ENABLED", false)?,
             parse_bool("BUZZ_DKG_TRUST_ENABLED", false)?,
         )?;
+        let reputation_provider = parse_reputation_provider(
+            optional_unicode_env("BUZZ_REPUTATION_PROVIDER")?,
+            dkg_query.as_ref(),
+        )?;
 
         const MAX_POLICY_MARKDOWN_BYTES: usize = 256 * 1024;
         let read_policy_markdown = |name: &str| -> Result<Option<String>, ConfigError> {
@@ -1188,6 +1242,7 @@ impl Config {
             push_gateway_delivery_url,
             push_gateway_timeout,
             dkg_query,
+            reputation_provider,
             join_policy,
             admin,
             web_dir,
@@ -1808,6 +1863,40 @@ mod tests {
             false,
         )
         .is_err());
+    }
+
+    #[test]
+    fn reputation_provider_defaults_safely_and_preserves_existing_dkg_trust() {
+        assert_eq!(
+            parse_reputation_provider(None, None).expect("plain relay default"),
+            ReputationProviderKind::Disabled
+        );
+        assert_eq!(
+            parse_reputation_provider(Some("local".to_string()), None)
+                .expect("local provider needs no DKG gateway"),
+            ReputationProviderKind::Local
+        );
+        assert!(parse_reputation_provider(Some("dkg".to_string()), None).is_err());
+        assert!(parse_reputation_provider(Some("remote".to_string()), None).is_err());
+
+        let dkg = parse_dkg_query_config(
+            Some("http://127.0.0.1:9296/v1/query".to_string()),
+            Some("0123456789abcdef0123456789abcdef".to_string()),
+            None,
+            true,
+            true,
+        )
+        .expect("valid DKG gateway")
+        .expect("configured DKG gateway");
+        assert_eq!(
+            parse_reputation_provider(None, Some(&dkg)).expect("legacy DKG default"),
+            ReputationProviderKind::Dkg
+        );
+        assert_eq!(
+            parse_reputation_provider(Some("local".to_string()), Some(&dkg))
+                .expect("explicit local override"),
+            ReputationProviderKind::Local
+        );
     }
 
     #[test]

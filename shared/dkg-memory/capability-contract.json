@@ -18,5 +18,10 @@
     "operation": "reputation_summary",
     "max_hops": 2,
     "methodology": "dkg-reputation-v1"
+  },
+  "provider": {
+    "extension": "buzz-reputation-v1",
+    "contract": "buzz-reputation@1",
+    "claim_schema": "buzz-trust-claim@1"
   }
 }

@@ -620,7 +620,7 @@ pub enum AuthState { Pending { challenge: String }, Authenticated(AuthContext), 
 | POST | `/events` | Submit a signed Nostr event over HTTP (same ingest path as WebSocket `EVENT`) |
 | POST | `/query` | Query Nostr events over HTTP with NIP-01 filters |
 | POST | `/count` | Count Nostr events over HTTP with NIP-45 filters |
-| POST | `/api/dkg/query` | Feature-configured, NIP-98-authenticated front for constrained DKG graph reads |
+| POST | `/api/dkg/query` | Feature-configured, NIP-98-authenticated front for constrained graph and reputation reads |
 | POST | `/hooks/{id}` | Workflow webhook trigger (secret-authenticated) |
 | PUT | `/media/upload` | Upload media blob (Blossom, 50 MB limit) |
 | GET/HEAD | `/media/{sha256_ext}` | Retrieve/probe media blob |
@@ -632,20 +632,30 @@ pub enum AuthState { Pending { challenge: String }, Authenticated(AuthContext), 
 The DKG query front is an intentional HTTP exception to Buzz's Nostr-first API.
 Graph, triple, trail, and evidence results can be large request/response reads;
 persisting them as relay events would add irrelevant history and fan-out. The
-route is absent unless both `BUZZ_DKG_QUERY_URL` and `BUZZ_DKG_QUERY_TOKEN` are
-configured. Before forwarding it binds the tenant from `Host`, verifies NIP-98
+route is absent unless either a DKG gateway is configured or
+`BUZZ_REPUTATION_PROVIDER=local` enables relay-local signed evidence reads.
+Before resolving it binds the tenant from `Host`, verifies NIP-98
 against the exact URL and body payload, applies shared HTTP admission and replay
 protection, enforces relay membership, and applies the relay's canonical
 tenant-scoped accessible-channel check. Only allowlisted operation-specific
 arguments plus the authenticated requester pubkey reach the internal
 integration. Request bodies, response bodies, redirects, and total request time
 are bounded; callers cannot provide a context-graph id, SPARQL, DKG endpoint, or
-DKG credential.
+DKG credential. The local provider has an independent two-second deadline,
+returns at most 100 normalized `buzz-trust-claim@1` claims per page, and never
+contacts relay hints supplied by an event. It resolves channel-scoped NIP-32
+vouches plus only the exact NIP-85 `kind:result-tag` sources selected by the
+authenticated viewer's public kind:10040 event. Encrypted or unresolved
+external source selections produce an explicit `partial` result rather than an
+empty or overclaimed result.
 
 Write support is advertised and routed only when `BUZZ_DKG_MEMORY_ENABLED=true`.
 The optional `dkg-trust@1` profile and its trust/reputation operations additionally
 require `BUZZ_DKG_TRUST_ENABLED=true`; this prevents a relay paired with an older
 integration build from claiming support it does not have.
+When that legacy trust flag is present, the DKG reputation provider remains the
+default. Operators can select `BUZZ_REPUTATION_PROVIDER=local` independently,
+including on a Buzz-only relay; `disabled` is the default everywhere else.
 
 **Constants:**
 

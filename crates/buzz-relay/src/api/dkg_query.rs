@@ -100,6 +100,19 @@ struct SemanticQueryArguments {
 struct EmptyArguments {}
 
 #[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TrustNetworkArguments {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    limit: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    since: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    until: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct PubkeyArguments {
     pubkey: String,
@@ -239,7 +252,36 @@ fn parse_and_sanitize_request(
             serde_json::to_value(arguments)
         }
         Operation::TrustNetwork => {
-            let arguments: EmptyArguments = parse_arguments(request.arguments)?;
+            let arguments: TrustNetworkArguments = parse_arguments(request.arguments)?;
+            if arguments
+                .limit
+                .is_some_and(|limit| !(1..=100).contains(&limit))
+            {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    "arguments.limit must be in 1..=100",
+                ));
+            }
+            if arguments
+                .cursor
+                .as_ref()
+                .is_some_and(|cursor| cursor.is_empty() || cursor.len() > 256)
+            {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    "arguments.cursor must contain 1..=256 bytes",
+                ));
+            }
+            if arguments
+                .since
+                .zip(arguments.until)
+                .is_some_and(|(since, until)| since > until)
+            {
+                return Err(api_error(
+                    StatusCode::BAD_REQUEST,
+                    "arguments.since must not be later than arguments.until",
+                ));
+            }
             serde_json::to_value(arguments)
         }
         Operation::ReputationSummary => {
@@ -374,12 +416,6 @@ pub async fn query(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<(StatusCode, Json<Value>), (StatusCode, Json<Value>)> {
-    let config = state
-        .config
-        .dkg_query
-        .as_ref()
-        .ok_or_else(|| not_found("not found"))?;
-
     let raw_host = headers
         .get(axum::http::header::HOST)
         .and_then(|value| value.to_str().ok())
@@ -424,10 +460,23 @@ pub async fn query(
     ) {
         let request = serde_json::to_value(&forward)
             .map_err(|_| internal_error("serializing reputation-provider request"))?;
-        let provider =
-            ConfiguredReputationProvider::from_dkg_config(state.config.dkg_query.as_ref());
+        let provider = ConfiguredReputationProvider::from_config(
+            state.config.reputation_provider,
+            state.config.dkg_query.as_ref(),
+            &state.db,
+            tenant.community(),
+            forward.channel_id,
+            requester_bytes.to_vec(),
+            &state.config.relay_url,
+        );
         return provider.attestations(&request).await.into_http_result();
     }
+
+    let config = state
+        .config
+        .dkg_query
+        .as_ref()
+        .ok_or_else(|| not_found("not found"))?;
 
     let client = HTTP_CLIENT
         .as_ref()
@@ -560,6 +609,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn trust_query_bounds_pagination_and_time_window() {
+        let requester = requester();
+        let sanitized = parse_and_sanitize_request(
+            &request(
+                "trust_network",
+                serde_json::json!({
+                    "limit": 25,
+                    "cursor": format!("1700000000:{}", "a".repeat(64)),
+                    "since": 1_600_000_000,
+                    "until": 1_800_000_000,
+                }),
+            ),
+            &requester,
+        )
+        .expect("bounded trust query");
+        assert_eq!(sanitized.arguments["limit"], 25);
+        assert!(parse_and_sanitize_request(
+            &request("trust_network", serde_json::json!({"limit": 101})),
+            &requester,
+        )
+        .is_err());
+        assert!(parse_and_sanitize_request(
+            &request(
+                "trust_network",
+                serde_json::json!({"since": 20, "until": 10})
+            ),
+            &requester,
+        )
+        .is_err());
+        assert!(parse_and_sanitize_request(
+            &request(
+                "trust_network",
+                serde_json::json!({"cursor": "x".repeat(257)})
+            ),
+            &requester,
+        )
+        .is_err());
     }
 
     #[test]
