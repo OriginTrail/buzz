@@ -642,6 +642,11 @@ integration. Request bodies, response bodies, redirects, and total request time
 are bounded; callers cannot provide a context-graph id, SPARQL, DKG endpoint, or
 DKG credential.
 
+Write support is advertised and routed only when `BUZZ_DKG_MEMORY_ENABLED=true`.
+The optional `dkg-trust@1` profile and its trust/reputation operations additionally
+require `BUZZ_DKG_TRUST_ENABLED=true`; this prevents a relay paired with an older
+integration build from claiming support it does not have.
+
 **Constants:**
 
 | Constant | Value | Purpose |

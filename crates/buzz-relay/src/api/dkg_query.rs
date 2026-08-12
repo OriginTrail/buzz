@@ -57,6 +57,8 @@ enum Operation {
     ContributorTrail,
     SoftwareContributors,
     DecisionTrace,
+    TrustNetwork,
+    ReputationSummary,
     SubgraphGraph,
     SubgraphTriples,
     Evidence,
@@ -233,6 +235,17 @@ fn parse_and_sanitize_request(
             let arguments: EmptyArguments = parse_arguments(request.arguments)?;
             serde_json::to_value(arguments)
         }
+        Operation::TrustNetwork => {
+            let arguments: EmptyArguments = parse_arguments(request.arguments)?;
+            serde_json::to_value(arguments)
+        }
+        Operation::ReputationSummary => {
+            let mut arguments: PubkeyArguments = parse_arguments(request.arguments)?;
+            arguments.pubkey = nostr::PublicKey::from_hex(&arguments.pubkey)
+                .map_err(|_| api_error(StatusCode::BAD_REQUEST, "arguments.pubkey is invalid"))?
+                .to_hex();
+            serde_json::to_value(arguments)
+        }
         Operation::ContributorTrail => {
             let mut arguments: PubkeyArguments = parse_arguments(request.arguments)?;
             arguments.pubkey = nostr::PublicKey::from_hex(&arguments.pubkey)
@@ -399,6 +412,13 @@ pub async fn query(
     .await?;
 
     let forward = parse_and_sanitize_request(&body, &requester)?;
+    if matches!(
+        forward.operation,
+        Operation::TrustNetwork | Operation::ReputationSummary
+    ) && !config.trust_enabled
+    {
+        return Err(not_found("not found"));
+    }
     enforce_authoritative_channel_read(&state, &tenant, forward.channel_id, &requester_bytes)
         .await?;
 
@@ -493,6 +513,11 @@ mod tests {
         let requester = requester();
         for (operation, arguments) in [
             ("channel_memory", serde_json::json!({})),
+            ("trust_network", serde_json::json!({})),
+            (
+                "reputation_summary",
+                serde_json::json!({ "pubkey": nostr::Keys::generate().public_key().to_hex() }),
+            ),
             (
                 "contributor_trail",
                 serde_json::json!({ "pubkey": nostr::Keys::generate().public_key().to_hex() }),

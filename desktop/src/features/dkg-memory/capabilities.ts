@@ -5,6 +5,8 @@ import capabilityContract from "../../../../shared/dkg-memory/capability-contrac
 export type DkgMemoryCapabilities = {
   memory: boolean;
   semanticQuery: boolean;
+  trust: boolean;
+  reputation: boolean;
 };
 
 type RelayCapabilityDocument = {
@@ -24,7 +26,12 @@ export function parseDkgMemoryCapabilities(
   document: unknown,
 ): DkgMemoryCapabilities {
   if (!document || typeof document !== "object") {
-    return { memory: false, semanticQuery: false };
+    return {
+      memory: false,
+      semanticQuery: false,
+      trust: false,
+      reputation: false,
+    };
   }
   const capability = document as RelayCapabilityDocument;
   const supportsV1 = hasString(
@@ -69,9 +76,21 @@ export function parseDkgMemoryCapabilities(
     capabilityContract.semantic_query.required_forms.every((form) =>
       hasString(semanticDescriptor?.forms, form),
     );
+  const trust =
+    memory &&
+    hasString(descriptor?.profiles, capabilityContract.trust.profile) &&
+    hasString(descriptor?.query_operations, capabilityContract.trust.operation);
+  const reputation =
+    trust &&
+    hasString(
+      descriptor?.query_operations,
+      capabilityContract.reputation.operation,
+    );
   return {
     memory,
     semanticQuery,
+    trust,
+    reputation,
   };
 }
 

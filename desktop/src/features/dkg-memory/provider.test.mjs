@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import test, { afterEach } from "node:test";
+import test, { afterEach, mock } from "node:test";
 
+import { relayClient } from "@/shared/api/relayClient";
 import {
   deriveContextGraphId,
   fetchChannelMemory,
   fetchDecisionTrace,
+  fetchReputationSummary,
   fetchSemanticQuery,
   fetchSoftwareContributors,
+  fetchTrustNetwork,
+  publishTrustVouch,
 } from "./api.ts";
 import {
   DkgProviderError,
@@ -31,7 +35,10 @@ const originalFetch = globalThis.fetch;
 const originalWindow = globalThis.window;
 const originalLocalStorage = globalThis.localStorage;
 
-function installTauri(relayHttpUrl = "https://relay.example/") {
+function installTauri(
+  relayHttpUrl = "https://relay.example/",
+  signer = () => AUTH_EVENT,
+) {
   const invocations = [];
   globalThis.window = {
     ...(globalThis.window ?? {}),
@@ -39,7 +46,7 @@ function installTauri(relayHttpUrl = "https://relay.example/") {
       invoke: async (command, args) => {
         invocations.push({ command, args });
         if (command === "get_relay_http_url") return relayHttpUrl;
-        if (command === "sign_event") return JSON.stringify(AUTH_EVENT);
+        if (command === "sign_event") return JSON.stringify(signer(args));
         throw new Error(`unexpected Tauri command: ${command}`);
       },
     },
@@ -48,6 +55,7 @@ function installTauri(relayHttpUrl = "https://relay.example/") {
 }
 
 afterEach(() => {
+  mock.restoreAll();
   resetDkgMemoryProvider();
   globalThis.fetch = originalFetch;
   globalThis.window = originalWindow;
@@ -404,4 +412,170 @@ test("software competency queries use only their fixed typed operations", async 
     },
   ]);
   assert.equal(JSON.stringify(bodies).includes("sparql"), false);
+});
+
+test("web of trust uses a fixed channel-scoped operation, never client SPARQL", async () => {
+  installTauri();
+  let body;
+  globalThis.fetch = async (_url, init) => {
+    body = JSON.parse(String(init.body));
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        channelId: body.channelId,
+        cg: "server-cg",
+        operation: body.operation,
+        result: {
+          completeness: "complete",
+          people: [
+            {
+              pubkey: "b".repeat(64),
+              contributions: 3,
+              latest: 1_786_363_200,
+              vouchesReceived: 1,
+              vouchesGiven: 0,
+              layer: "SWM",
+            },
+          ],
+          vouches: [],
+        },
+      }),
+    );
+  };
+
+  const result = await fetchTrustNetwork(CHANNEL_ID);
+  assert.deepEqual(body, {
+    channelId: CHANNEL_ID,
+    operation: "trust_network",
+    arguments: {},
+  });
+  assert.equal(JSON.stringify(body).includes("sparql"), false);
+  assert.equal(result.gate, "ok");
+  assert.equal(result.cg, "server-cg");
+  assert.equal(result.people[0].contributions, 3);
+});
+
+test("reputation uses a fixed subject query and returns an explainable bounded score", async () => {
+  installTauri();
+  let body;
+  globalThis.fetch = async (_url, init) => {
+    body = JSON.parse(String(init.body));
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        channelId: body.channelId,
+        cg: "server-cg",
+        operation: body.operation,
+        result: {
+          subject: "b".repeat(64),
+          perspective: "a".repeat(64),
+          context: "channel",
+          completeness: "complete",
+          score: 74,
+          confidence: "high",
+          breakdown: {
+            directTrust: 100,
+            networkTrust: 60,
+            demonstratedWork: 50,
+            evidenceDiversity: 92,
+          },
+          signals: {
+            directVouch: true,
+            twoHopVouchers: 1,
+            independentVouchers: 3,
+            evidenceRecords: 4,
+            verifiableEvidence: false,
+          },
+          reasons: ["Three independent people signed vouches."],
+          evidence: [],
+          methodology: "dkg-reputation-v1",
+        },
+      }),
+    );
+  };
+
+  const result = await fetchReputationSummary(CHANNEL_ID, "b".repeat(64));
+  assert.deepEqual(body, {
+    channelId: CHANNEL_ID,
+    operation: "reputation_summary",
+    arguments: { pubkey: "b".repeat(64) },
+  });
+  assert.equal(JSON.stringify(body).includes("sparql"), false);
+  assert.equal(result.score, 74);
+  assert.equal(result.methodology, "dkg-reputation-v1");
+});
+
+test("a vouch signs and publishes human evidence before proposing its DKG projection", async () => {
+  const issuer = "a".repeat(64);
+  const subject = "b".repeat(64);
+  const signed = [];
+  installTauri("https://relay.example/", (args) => {
+    const event = {
+      id: String(signed.length + 1).repeat(64),
+      sig: "c".repeat(128),
+      pubkey: issuer,
+      kind: args.kind,
+      created_at: 1_786_363_200 + signed.length,
+      tags: args.tags,
+      content: args.content,
+    };
+    signed.push(event);
+    return event;
+  });
+  const published = [];
+  mock.method(relayClient, "publishEvent", async (event) => {
+    published.push(event);
+  });
+  let memoryRequest;
+  globalThis.fetch = async (url, init) => {
+    assert.equal(String(url), "https://relay.example/api/dkg/memory");
+    memoryRequest = JSON.parse(String(init.body));
+    return new Response(
+      JSON.stringify({
+        contextGraphId: "server-cg",
+        operationId: 42,
+        state: "stored",
+      }),
+    );
+  };
+
+  const result = await publishTrustVouch({
+    channelId: CHANNEL_ID,
+    subjectPubkey: subject,
+    subjectName: "Alice",
+    note: "  Caught a rollback edge case while reviewing two releases.  ",
+  });
+
+  assert.equal(result.eventId, "1".repeat(64));
+  assert.equal(result.state, "stored");
+  assert.equal(published.length, 1);
+  assert.deepEqual(published[0], signed[0]);
+  assert.equal(signed[0].kind, 1985);
+  assert.equal(
+    signed[0].content,
+    "Caught a rollback edge case while reviewing two releases.",
+  );
+  assert.deepEqual(signed[0].tags, [
+    ["h", CHANNEL_ID],
+    ["L", "buzz.wot"],
+    ["l", "vouch", "buzz.wot"],
+    ["p", subject],
+  ]);
+
+  assert.equal(memoryRequest.kind, 40009);
+  assert.deepEqual(memoryRequest.tags, [
+    ["h", CHANNEL_ID],
+    ["t", "dkg-memory-proposal"],
+    ["e", "1".repeat(64), "", "source"],
+  ]);
+  const proposal = JSON.parse(memoryRequest.content);
+  assert.deepEqual(proposal.profiles, ["dkg-memory@1", "dkg-trust@1"]);
+  assert.equal(proposal.entities[0].type, "trust:Vouch");
+  assert.equal(proposal.entities[1].locator.uri, `urn:nostr:pubkey:${issuer}`);
+  assert.equal(proposal.entities[2].locator.uri, `urn:nostr:pubkey:${subject}`);
+  assert.deepEqual(proposal.relations, [
+    { subject: "vouch", predicate: "trust:issuer", object: "issuer" },
+    { subject: "vouch", predicate: "trust:subject", object: "subject" },
+  ]);
+  assert.equal(signed.at(-1).kind, 27235);
 });

@@ -12,7 +12,8 @@ use crate::config::DEFAULT_MAX_FRAME_BYTES;
 ///
 /// NIP-43 (relay membership) is advertised separately by [`RelayInfo::build`]
 /// only when membership enforcement is actually enabled — see that function.
-pub(crate) const SUPPORTED_NIPS: &[u32] = &[1, 2, 10, 11, 16, 17, 23, 25, 29, 33, 38, 42, 50, 56];
+pub(crate) const SUPPORTED_NIPS: &[u32] =
+    &[1, 2, 10, 11, 16, 17, 23, 25, 29, 32, 33, 38, 42, 50, 56, 85];
 
 /// NIP-43 (relay membership). Advertised only when the relay actually
 /// enforces membership (`BUZZ_REQUIRE_RELAY_MEMBERSHIP=true`) AND has a
@@ -235,22 +236,28 @@ fn push_descriptor(
     }))
 }
 
-fn dkg_memory_descriptor() -> serde_json::Value {
+fn dkg_memory_descriptor(trust_enabled: bool) -> serde_json::Value {
+    let mut profiles = vec!["dkg-memory@1", "dkg-software@1"];
+    let mut query_operations = vec![
+        "channel_memory",
+        "contributor_trail",
+        "software_contributors",
+        "decision_trace",
+        "subgraph_graph",
+        "subgraph_triples",
+        "evidence",
+        "semantic_query",
+    ];
+    if trust_enabled {
+        profiles.push("dkg-trust@1");
+        query_operations.splice(4..4, ["trust_network", "reputation_summary"]);
+    }
     serde_json::json!({
         "schema_versions": [1, 2],
-        "profiles": ["dkg-memory@1", "dkg-software@1"],
+        "profiles": profiles,
         "adapter_profiles": ["buzz-nostr@1"],
         "proposal_kind": 40009,
-        "query_operations": [
-            "channel_memory",
-            "contributor_trail",
-            "software_contributors",
-            "decision_trace",
-            "subgraph_graph",
-            "subgraph_triples",
-            "evidence",
-            "semantic_query"
-        ],
+        "query_operations": query_operations,
         "semantic_query": {
             "scopes": ["current_channel"],
             "forms": ["select", "ask", "construct"],
@@ -297,7 +304,7 @@ pub(crate) async fn nip11_document(state: &crate::state::AppState, raw_host: &st
         info.push = Some(push);
     }
     if let Some(config) = state.config.dkg_query.as_ref() {
-        info.dkg_memory = Some(dkg_memory_descriptor());
+        info.dkg_memory = Some(dkg_memory_descriptor(config.trust_enabled));
         if config.agent_memory_enabled {
             info.supported_extensions
                 .get_or_insert_default()
@@ -414,6 +421,18 @@ mod tests {
     }
 
     #[test]
+    fn supported_nips_include_web_of_trust_event_conventions() {
+        assert!(
+            SUPPORTED_NIPS.contains(&32),
+            "NIP-32 labels must be advertised when kind:1985 ingest is live"
+        );
+        assert!(
+            SUPPORTED_NIPS.contains(&85),
+            "NIP-85 assertions must be advertised when kinds 10040 and 30382 are live"
+        );
+    }
+
+    #[test]
     fn supported_nips_includes_nip38() {
         assert!(
             SUPPORTED_NIPS.contains(&38),
@@ -437,7 +456,7 @@ mod tests {
 
     #[test]
     fn dkg_memory_descriptor_advertises_v2_profiles_and_competency_queries() {
-        let descriptor = dkg_memory_descriptor();
+        let descriptor = dkg_memory_descriptor(true);
         assert!(descriptor["schema_versions"]
             .as_array()
             .is_some_and(|versions| versions.contains(&serde_json::json!(2))));
@@ -450,8 +469,22 @@ mod tests {
         assert!(descriptor["query_operations"]
             .as_array()
             .is_some_and(|operations| operations.contains(&serde_json::json!("semantic_query"))));
+        assert!(descriptor["query_operations"].as_array().is_some_and(
+            |operations| operations.contains(&serde_json::json!("reputation_summary"))
+        ));
         assert_eq!(descriptor["semantic_query"]["scopes"][0], "current_channel");
         assert_eq!(descriptor["semantic_query"]["max_limit"], 100);
+
+        let descriptor = dkg_memory_descriptor(false);
+        assert!(descriptor["profiles"]
+            .as_array()
+            .is_some_and(|profiles| !profiles.contains(&serde_json::json!("dkg-trust@1"))));
+        assert!(descriptor["query_operations"]
+            .as_array()
+            .is_some_and(
+                |operations| !operations.contains(&serde_json::json!("trust_network"))
+                    && !operations.contains(&serde_json::json!("reputation_summary"))
+            ));
     }
 
     #[test]

@@ -16,8 +16,13 @@ async function advertiseDkgMemory(page: import("@playwright/test").Page) {
       body: JSON.stringify({
         supported_extensions: ["buzz-dkg-memory-v2"],
         dkg_memory: {
-          profiles: ["dkg-memory@1"],
-          query_operations: ["channel_memory", "semantic_query"],
+          profiles: ["dkg-memory@1", "dkg-trust@1"],
+          query_operations: [
+            "channel_memory",
+            "semantic_query",
+            "trust_network",
+            "reputation_summary",
+          ],
           schema_versions: [2],
           semantic_query: {
             scopes: ["current_channel"],
@@ -41,8 +46,13 @@ test("channel memory exposes graph and authenticated search without named subgra
       body: JSON.stringify({
         supported_extensions: ["buzz-dkg-memory-v2"],
         dkg_memory: {
-          profiles: ["dkg-memory@1"],
-          query_operations: ["channel_memory", "semantic_query"],
+          profiles: ["dkg-memory@1", "dkg-trust@1"],
+          query_operations: [
+            "channel_memory",
+            "semantic_query",
+            "trust_network",
+            "reputation_summary",
+          ],
           schema_versions: [2],
           semantic_query: {
             scopes: ["current_channel"],
@@ -135,6 +145,68 @@ test("channel memory exposes graph and authenticated search without named subgra
           },
         ],
       };
+    } else if (request.operation === "trust_network") {
+      result = {
+        completeness: "complete",
+        people: [
+          {
+            pubkey: "deadbeef".repeat(8),
+            contributions: 4,
+            latest: 1_786_363_200,
+            vouchesReceived: 1,
+            vouchesGiven: 0,
+            layer: "SWM",
+          },
+          {
+            pubkey: "cafebabe".repeat(8),
+            contributions: 2,
+            latest: 1_786_363_100,
+            vouchesReceived: 0,
+            vouchesGiven: 1,
+            layer: "SWM",
+          },
+        ],
+        vouches: [
+          {
+            uri: "urn:vouch:review",
+            issuer: "cafebabe".repeat(8),
+            subject: "deadbeef".repeat(8),
+            note: "Caught a rollback edge case while reviewing two releases.",
+            status: "active",
+            at: 1_786_363_200,
+            sourceEvent: `urn:nostr:event:${"1".repeat(64)}`,
+            layer: "SWM",
+          },
+        ],
+      };
+    } else if (request.operation === "reputation_summary") {
+      result = {
+        subject: request.arguments.pubkey,
+        perspective: "cafebabe".repeat(8),
+        context: "channel",
+        completeness: "complete",
+        score: 74,
+        confidence: "high",
+        breakdown: {
+          directTrust: 100,
+          networkTrust: 60,
+          demonstratedWork: 50,
+          evidenceDiversity: 92,
+        },
+        signals: {
+          directVouch: true,
+          twoHopVouchers: 1,
+          independentVouchers: 3,
+          evidenceRecords: 4,
+          verifiableEvidence: false,
+        },
+        reasons: [
+          "3 independent contributors signed a vouch.",
+          "1 vouch arrived through a two-hop trust path.",
+        ],
+        evidence: [],
+        methodology: "dkg-reputation-v1",
+      };
     } else {
       result = {};
     }
@@ -187,6 +259,27 @@ test("channel memory exposes graph and authenticated search without named subgra
   expect(searchRequests).toEqual([
     { channelId: memoryChannelId, operation: "semantic_query" },
   ]);
+
+  await panel.getByRole("tab", { name: "Trust" }).click();
+  await expect(panel.getByTestId("dkg-web-of-trust")).toBeVisible();
+  await expect(
+    panel.getByText("Contextual, explainable reputation"),
+  ).toBeVisible();
+  await expect(
+    panel.getByText(
+      "Caught a rollback edge case while reviewing two releases.",
+    ),
+  ).toBeVisible();
+  await expect(panel.getByText("Evidence records")).toBeVisible();
+  await expect(panel.getByTestId("dkg-reputation-summary")).toBeVisible();
+  await expect(panel.getByTestId("dkg-reputation-score")).toHaveText("74/100");
+  await expect(panel.getByText("Why this score")).toBeVisible();
+  await waitForAnimations(page);
+  await panel.screenshot({
+    path: "test-results/dkg-memory-beta/panel-trust.png",
+  });
+
+  await panel.getByRole("tab", { name: "Overview" }).click();
   await waitForAnimations(page);
   await panel.screenshot({
     path: "test-results/dkg-memory-beta/panel-search.png",

@@ -12,6 +12,8 @@ export type DkgQueryOperation =
   | "contributor_trail"
   | "software_contributors"
   | "decision_trace"
+  | "trust_network"
+  | "reputation_summary"
   | "subgraph_graph"
   | "subgraph_triples"
   | "evidence"
@@ -30,6 +32,8 @@ type DkgQueryArguments = {
     commitSha: string;
     componentName: string;
   };
+  trust_network: Record<string, never>;
+  reputation_summary: { pubkey: string };
   subgraph_graph: { name: string };
   subgraph_triples: { name: string };
   evidence: { uri: string };
@@ -256,6 +260,8 @@ function adaptCommunityResult<Operation extends DkgQueryOperation>(
     case "channel_memory":
     case "software_contributors":
     case "decision_trace":
+    case "trust_network":
+    case "reputation_summary":
     case "subgraph_graph":
     case "subgraph_triples":
     case "semantic_query":
