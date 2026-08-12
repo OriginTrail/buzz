@@ -7,7 +7,11 @@
 import { relayClient } from "@/shared/api/relayClient";
 import { getRelayHttpUrl, signRelayEvent } from "@/shared/api/tauri";
 import { fetchDkgMemoryCapabilities } from "./capabilities";
-import { postAuthenticatedDkgJson, queryDkgProvider } from "./provider";
+import {
+  postAuthenticatedDkgJson,
+  queryDkgProvider,
+  type ReputationProviderMetadata,
+} from "./provider";
 import {
   memoryProposalProgress,
   normalizeMemoryProposalResponse,
@@ -140,7 +144,7 @@ export interface WorkEvidence {
   layer: "SWM" | "VM";
 }
 
-export interface TrustNetwork {
+export interface TrustNetwork extends Partial<ReputationProviderMetadata> {
   gate: MemoryGate;
   cg?: string;
   completeness: "complete" | "partial";
@@ -148,7 +152,7 @@ export interface TrustNetwork {
   vouches: TrustVouch[];
 }
 
-export interface ReputationSummary {
+export interface ReputationSummary extends Partial<ReputationProviderMetadata> {
   gate: MemoryGate;
   cg?: string;
   subject: string;

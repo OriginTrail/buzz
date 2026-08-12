@@ -7,6 +7,26 @@ const NIP98_KIND = 27235;
 
 export type ExplorerSource = "local" | "gateway";
 
+export type ReputationResolution =
+  | "disabled"
+  | "complete"
+  | "partial"
+  | "unavailable";
+
+export interface ReputationSourceDiagnostic {
+  sourceId: string;
+  resolution: ReputationResolution;
+  detail?: string;
+}
+
+export interface ReputationProviderMetadata {
+  resolution: ReputationResolution;
+  providerId: string;
+  providerVersion: string;
+  asOf: string;
+  sourceDiagnostics: ReputationSourceDiagnostic[];
+}
+
 export type DkgQueryOperation =
   | "channel_memory"
   | "contributor_trail"
@@ -57,7 +77,7 @@ type CommunityGatewayEnvelope = {
   cg: string;
   operation: DkgQueryOperation;
   result: unknown;
-};
+} & Partial<ReputationProviderMetadata>;
 
 type AuthenticatedDkgPost = {
   path: `/api/dkg/${string}`;
@@ -69,18 +89,21 @@ export class DkgProviderError extends Error {
   status: number;
   code?: string;
   details?: unknown;
+  reputation?: ReputationProviderMetadata;
 
   constructor(
     message: string,
     status: number,
     code?: string,
     details?: unknown,
+    reputation?: ReputationProviderMetadata,
   ) {
     super(message);
     this.name = "DkgProviderError";
     this.status = status;
     this.code = code;
     this.details = details;
+    this.reputation = reputation;
   }
 }
 
@@ -202,6 +225,7 @@ export async function postAuthenticatedDkgJson<Result>({
       response.status,
       error.code,
       error.details,
+      reputationProviderMetadata(payload),
     );
   }
   return { result: (payload ?? {}) as Result, status: response.status };
@@ -240,6 +264,46 @@ function validateEnvelope<Operation extends DkgQueryOperation>(
   return value as CommunityGatewayEnvelope & { operation: Operation };
 }
 
+function reputationProviderMetadata(
+  value: unknown,
+): ReputationProviderMetadata | undefined {
+  if (!isRecord(value) || value.resolution === undefined) return undefined;
+  const resolutions = new Set<ReputationResolution>([
+    "disabled",
+    "complete",
+    "partial",
+    "unavailable",
+  ]);
+  if (
+    typeof value.resolution !== "string" ||
+    !resolutions.has(value.resolution as ReputationResolution) ||
+    typeof value.providerId !== "string" ||
+    typeof value.providerVersion !== "string" ||
+    typeof value.asOf !== "string" ||
+    !Array.isArray(value.sourceDiagnostics)
+  ) {
+    throw protocolError("invalid reputation-provider metadata");
+  }
+  for (const diagnostic of value.sourceDiagnostics) {
+    if (
+      !isRecord(diagnostic) ||
+      typeof diagnostic.sourceId !== "string" ||
+      typeof diagnostic.resolution !== "string" ||
+      !resolutions.has(diagnostic.resolution as ReputationResolution) ||
+      (diagnostic.detail !== undefined && typeof diagnostic.detail !== "string")
+    ) {
+      throw protocolError("invalid reputation source diagnostic");
+    }
+  }
+  return {
+    resolution: value.resolution as ReputationResolution,
+    providerId: value.providerId,
+    providerVersion: value.providerVersion,
+    asOf: value.asOf,
+    sourceDiagnostics: value.sourceDiagnostics as ReputationSourceDiagnostic[],
+  };
+}
+
 function adaptCommunityResult<Operation extends DkgQueryOperation>(
   envelope: CommunityGatewayEnvelope & { operation: Operation },
 ): unknown {
@@ -265,7 +329,12 @@ function adaptCommunityResult<Operation extends DkgQueryOperation>(
     case "subgraph_graph":
     case "subgraph_triples":
     case "semantic_query":
-      return { ...envelope.result, gate: "ok", cg: envelope.cg };
+      return {
+        ...envelope.result,
+        ...(reputationProviderMetadata(envelope) ?? {}),
+        gate: "ok",
+        cg: envelope.cg,
+      };
     case "evidence":
       return { ...envelope.result, gate: "ok" };
     default:

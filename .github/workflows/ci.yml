@@ -745,6 +745,17 @@ jobs:
             --run-ignored ignored-only
         env:
           DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
+      - name: Web-of-Trust event lifecycle contract
+        # Verifies the persistence/query semantics of kinds 1985, 10040 and
+        # 30382 against real Postgres: accumulation, replacement, equal-time
+        # ties, author/coordinate isolation, deletion, and stale-replay fences.
+        run: |
+          cargo nextest run \
+            --archive-file target/ci/backend-integration-tests.tar.zst \
+            -E 'package(buzz-db) and test(web_of_trust_event_lifecycles_persist_and_query_exactly)' \
+            --run-ignored ignored-only
+        env:
+          DATABASE_URL: postgres://buzz:${{ env.BUZZ_TEST_POSTGRES_PASSWORD }}@localhost:5432/buzz
       - name: Upload relay log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
