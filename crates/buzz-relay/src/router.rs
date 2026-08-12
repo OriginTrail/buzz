@@ -50,13 +50,20 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
     let git_policy_router = api::git::git_policy_router(state.clone());
 
-    let dkg_query_router = state.config.dkg_query.as_ref().map(|config| {
+    let reputation_routed =
+        state.config.reputation_provider != crate::config::ReputationProviderKind::Disabled;
+    let dkg_query_router = (state.config.dkg_query.is_some() || reputation_routed).then(|| {
         let mut router = Router::new()
             .route("/api/dkg/query", post(api::dkg_query::query))
             .layer(RequestBodyLimitLayer::new(
                 api::dkg_query::MAX_REQUEST_BYTES,
             ));
-        if config.agent_memory_enabled {
+        if state
+            .config
+            .dkg_query
+            .as_ref()
+            .is_some_and(|config| config.agent_memory_enabled)
+        {
             router = router.merge(
                 Router::new()
                     .route("/api/dkg/memory", post(api::dkg_memory::propose))

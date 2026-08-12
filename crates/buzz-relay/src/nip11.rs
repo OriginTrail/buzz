@@ -44,6 +44,9 @@ pub struct RelayInfo {
     /// Versioned DKG memory profiles and fixed query operations exposed by this relay.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dkg_memory: Option<serde_json::Value>,
+    /// Backend-neutral signed reputation-evidence provider, when configured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reputation: Option<serde_json::Value>,
     /// NIP-PL executor descriptor. Present only when push delivery is configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub push: Option<serde_json::Value>,
@@ -168,6 +171,7 @@ impl RelayInfo {
             supported_nips,
             supported_extensions: Some(vec!["nip-er".to_string()]),
             dkg_memory: None,
+            reputation: None,
             push: None,
             software: "https://github.com/block/buzz".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -267,6 +271,38 @@ fn dkg_memory_descriptor(trust_enabled: bool) -> serde_json::Value {
     })
 }
 
+fn reputation_descriptor(
+    provider: crate::config::ReputationProviderKind,
+) -> Option<serde_json::Value> {
+    use crate::config::ReputationProviderKind;
+
+    let (provider_id, operations) = match provider {
+        ReputationProviderKind::Disabled => return None,
+        ReputationProviderKind::Local => ("buzz-relay-local", vec!["trust_network"]),
+        ReputationProviderKind::Dkg => (
+            "origintrail-dkg",
+            vec!["trust_network", "reputation_summary"],
+        ),
+    };
+    let limits = match provider {
+        ReputationProviderKind::Local => serde_json::json!({
+            "max_claims": 100,
+            "deadline_ms": 2000,
+            "max_nip85_sources": 32,
+        }),
+        ReputationProviderKind::Dkg => serde_json::json!({"bounded": true}),
+        ReputationProviderKind::Disabled => unreachable!("handled above"),
+    };
+    Some(serde_json::json!({
+        "contract": "buzz-reputation@1",
+        "provider": provider_id,
+        "claim_schema": "buzz-trust-claim@1",
+        "operations": operations,
+        "resolution_states": ["disabled", "complete", "partial", "unavailable"],
+        "limits": limits,
+    }))
+}
+
 /// Builds the served NIP-11 document for a request arriving on `raw_host`.
 ///
 /// Centralised so the content-negotiated root handler and the dedicated
@@ -313,6 +349,12 @@ pub(crate) async fn nip11_document(state: &crate::state::AppState, raw_host: &st
                 .get_or_insert_default()
                 .push("buzz-dkg-memory-v2".to_string());
         }
+    }
+    if let Some(reputation) = reputation_descriptor(state.config.reputation_provider) {
+        info.supported_extensions
+            .get_or_insert_default()
+            .push("buzz-reputation-v1".to_string());
+        info.reputation = Some(reputation);
     }
     info
 }
@@ -403,6 +445,27 @@ mod tests {
         assert_eq!(
             descriptor["push_kinds"],
             serde_json::json!(crate::handlers::push_lease::PUSH_KINDS)
+        );
+    }
+
+    #[test]
+    fn reputation_descriptor_is_backend_neutral_and_local_is_bounded() {
+        use crate::config::ReputationProviderKind;
+
+        assert!(reputation_descriptor(ReputationProviderKind::Disabled).is_none());
+        let local = reputation_descriptor(ReputationProviderKind::Local)
+            .expect("local provider descriptor");
+        assert_eq!(local["contract"], "buzz-reputation@1");
+        assert_eq!(local["claim_schema"], "buzz-trust-claim@1");
+        assert_eq!(local["operations"], serde_json::json!(["trust_network"]));
+        assert_eq!(local["limits"]["max_claims"], 100);
+        assert_eq!(local["limits"]["deadline_ms"], 2000);
+
+        let dkg =
+            reputation_descriptor(ReputationProviderKind::Dkg).expect("DKG provider descriptor");
+        assert_eq!(
+            dkg["operations"],
+            serde_json::json!(["trust_network", "reputation_summary"])
         );
     }
 

@@ -7,13 +7,20 @@
 //! clients remain compatible while reputation callers gain explicit
 //! resolution semantics.
 
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::time::Duration;
+
 use async_trait::async_trait;
 use axum::{http::StatusCode, response::Json};
-use chrono::{DateTime, Utc};
-use serde::Serialize;
-use serde_json::{Map, Value};
+use chrono::{DateTime, TimeZone, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
+use uuid::Uuid;
 
-use crate::config::DkgQueryConfig;
+use buzz_core::{CommunityId, StoredEvent};
+use buzz_db::{Db, EventQuery};
+
+use crate::config::{DkgQueryConfig, ReputationProviderKind};
 
 use super::{api_error, dkg_query};
 
@@ -39,7 +46,7 @@ pub enum ResolutionState {
 #[serde(rename_all = "camelCase")]
 pub struct SourceDiagnostic {
     /// Stable identifier for the contributing source.
-    pub source_id: &'static str,
+    pub source_id: String,
     /// Resolution reached by this source.
     pub resolution: ResolutionState,
     /// Safe, human-readable reason for a non-complete result.
@@ -82,10 +89,25 @@ impl ReputationBatch {
             provider_version: "dkg-trust@1",
             as_of: Utc::now(),
             source_diagnostics: vec![SourceDiagnostic {
-                source_id: "origintrail-dkg",
+                source_id: "origintrail-dkg".to_string(),
                 resolution,
                 detail,
             }],
+            response: Some(response),
+        }
+    }
+
+    fn local(
+        resolution: ResolutionState,
+        response: ApiResponse,
+        source_diagnostics: Vec<SourceDiagnostic>,
+    ) -> Self {
+        Self {
+            resolution,
+            provider_id: "buzz-relay-local",
+            provider_version: "buzz-trust-claim@1",
+            as_of: Utc::now(),
+            source_diagnostics,
             response: Some(response),
         }
     }
@@ -166,6 +188,755 @@ impl ReputationProvider for NullProvider {
     async fn attestations(&self, _request: &Value) -> ReputationBatch {
         ReputationBatch::disabled()
     }
+}
+
+const LOCAL_QUERY_DEADLINE: Duration = Duration::from_secs(2);
+const LOCAL_EVENT_LIMIT: i64 = 500;
+const LOCAL_SOURCE_LIMIT: usize = 32;
+const DEFAULT_CLAIM_LIMIT: usize = 100;
+const MAX_CLAIM_LIMIT: usize = 100;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalRequest {
+    operation: String,
+    #[serde(default)]
+    arguments: Value,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TrustQueryArguments {
+    limit: Option<u16>,
+    cursor: Option<String>,
+    since: Option<i64>,
+    until: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct SelectedSource {
+    result_tag: String,
+    pubkey: String,
+    relay: Option<String>,
+}
+
+#[derive(Debug)]
+struct NormalizedClaim {
+    created_at: u64,
+    event_id: String,
+    issuer: String,
+    subject: String,
+    claim_type: &'static str,
+    value: Value,
+}
+
+#[derive(Debug)]
+struct LocalTrustResult {
+    response: ApiResponse,
+    resolution: ResolutionState,
+    diagnostics: Vec<SourceDiagnostic>,
+}
+
+/// Provider that resolves signed trust evidence from the current community's
+/// bounded relay-local event store. It never opens arbitrary relay URLs from a
+/// kind:10040 event; an external hint is reported as partial unless the
+/// selected assertion has already been replicated into this relay.
+#[derive(Debug)]
+pub struct LocalProvider<'a> {
+    db: &'a Db,
+    community: CommunityId,
+    channel_id: Uuid,
+    requester_pubkey: Vec<u8>,
+    relay_url: &'a str,
+}
+
+impl<'a> LocalProvider<'a> {
+    fn new(
+        db: &'a Db,
+        community: CommunityId,
+        channel_id: Uuid,
+        requester_pubkey: Vec<u8>,
+        relay_url: &'a str,
+    ) -> Self {
+        Self {
+            db,
+            community,
+            channel_id,
+            requester_pubkey,
+            relay_url,
+        }
+    }
+
+    async fn resolve(&self, request: &Value) -> LocalTrustResult {
+        let request = match serde_json::from_value::<LocalRequest>(request.clone()) {
+            Ok(request) => request,
+            Err(_) => return self.invalid_request("invalid local reputation request"),
+        };
+        if request.operation != "trust_network" {
+            return LocalTrustResult {
+                response: api_error(
+                    StatusCode::NOT_IMPLEMENTED,
+                    "the relay-local provider exposes signed trust evidence but does not compute reputation scores",
+                ),
+                resolution: ResolutionState::Unavailable,
+                diagnostics: vec![SourceDiagnostic {
+                    source_id: "relay-local".to_string(),
+                    resolution: ResolutionState::Unavailable,
+                    detail: Some("operation is not implemented by this provider".to_string()),
+                }],
+            };
+        }
+        let arguments = match serde_json::from_value::<TrustQueryArguments>(request.arguments) {
+            Ok(arguments) => arguments,
+            Err(_) => return self.invalid_request("invalid trust query arguments"),
+        };
+        if let Err(message) = validate_trust_arguments(&arguments) {
+            return self.invalid_request(&message);
+        }
+        match tokio::time::timeout(LOCAL_QUERY_DEADLINE, self.trust_network(arguments)).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(detail)) => LocalTrustResult {
+                response: api_error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "relay-local reputation evidence is unavailable",
+                ),
+                resolution: ResolutionState::Unavailable,
+                diagnostics: vec![SourceDiagnostic {
+                    source_id: "relay-local".to_string(),
+                    resolution: ResolutionState::Unavailable,
+                    detail: Some(detail),
+                }],
+            },
+            Err(_) => LocalTrustResult {
+                response: api_error(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "relay-local reputation query exceeded its deadline",
+                ),
+                resolution: ResolutionState::Unavailable,
+                diagnostics: vec![SourceDiagnostic {
+                    source_id: "relay-local".to_string(),
+                    resolution: ResolutionState::Unavailable,
+                    detail: Some("provider deadline exceeded".to_string()),
+                }],
+            },
+        }
+    }
+
+    fn invalid_request(&self, message: &str) -> LocalTrustResult {
+        LocalTrustResult {
+            response: api_error(StatusCode::BAD_REQUEST, message),
+            resolution: ResolutionState::Unavailable,
+            diagnostics: vec![SourceDiagnostic {
+                source_id: "relay-local".to_string(),
+                resolution: ResolutionState::Unavailable,
+                detail: Some("request contract validation failed".to_string()),
+            }],
+        }
+    }
+
+    async fn trust_network(
+        &self,
+        arguments: TrustQueryArguments,
+    ) -> Result<LocalTrustResult, String> {
+        let limit = usize::from(arguments.limit.unwrap_or(DEFAULT_CLAIM_LIMIT as u16))
+            .clamp(1, MAX_CLAIM_LIMIT);
+        let since = parse_timestamp(arguments.since, "since")?;
+        let until = parse_timestamp(arguments.until, "until")?;
+        if since.zip(until).is_some_and(|(since, until)| since > until) {
+            return Err("since must not be later than until".to_string());
+        }
+        let cursor = arguments.cursor.as_deref().map(parse_cursor).transpose()?;
+
+        let mut vouch_query = EventQuery::for_community(self.community);
+        vouch_query.channel_id = Some(self.channel_id);
+        vouch_query.kinds = Some(vec![1985]);
+        vouch_query.since = since;
+        vouch_query.until = until;
+        vouch_query.limit = Some(LOCAL_EVENT_LIMIT + 1);
+
+        let mut preference_query = EventQuery::for_community(self.community);
+        preference_query.global_only = true;
+        preference_query.kinds = Some(vec![10040]);
+        preference_query.pubkey = Some(self.requester_pubkey.clone());
+        preference_query.limit = Some(1);
+
+        let (mut vouch_events, preference_events) = tokio::try_join!(
+            self.db.query_events(&vouch_query),
+            self.db.query_events(&preference_query)
+        )
+        .map_err(|_| "relay event-store read failed".to_string())?;
+
+        let preference = preference_events.first();
+        let (selected_sources, truncated_sources) = preference
+            .map(|event| selected_sources(&event.event))
+            .unwrap_or_default();
+        let selected_authors = selected_sources
+            .iter()
+            .filter_map(|source| hex::decode(&source.pubkey).ok())
+            .filter(|pubkey| pubkey.len() == 32)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+
+        let vouch_window_truncated = vouch_events.len() > LOCAL_EVENT_LIMIT as usize;
+        vouch_events.truncate(LOCAL_EVENT_LIMIT as usize);
+
+        let mut assertion_events = if selected_authors.is_empty() {
+            Vec::new()
+        } else {
+            let mut assertion_query = EventQuery::for_community(self.community);
+            assertion_query.global_only = true;
+            assertion_query.kinds = Some(vec![30382]);
+            assertion_query.authors = Some(selected_authors);
+            assertion_query.since = since;
+            assertion_query.until = until;
+            assertion_query.limit = Some(LOCAL_EVENT_LIMIT + 1);
+            self.db
+                .query_events(&assertion_query)
+                .await
+                .map_err(|_| "trusted-assertion read failed".to_string())?
+        };
+
+        let assertion_window_truncated = assertion_events.len() > LOCAL_EVENT_LIMIT as usize;
+        assertion_events.truncate(LOCAL_EVENT_LIMIT as usize);
+        let event_window_truncated = vouch_window_truncated || assertion_window_truncated;
+
+        let mut claims = normalize_vouch_claims(&vouch_events, self.community, self.channel_id);
+        let (assertion_claims, matched_sources) =
+            normalize_assertion_claims(&assertion_events, &selected_sources, self.community);
+        claims.extend(assertion_claims);
+        claims.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| left.event_id.cmp(&right.event_id))
+        });
+        if let Some((cursor_time, cursor_id)) = cursor {
+            claims.retain(|claim| {
+                claim.created_at < cursor_time
+                    || (claim.created_at == cursor_time && claim.event_id > cursor_id)
+            });
+        }
+        let has_next_page = claims.len() > limit;
+        claims.truncate(limit);
+        let next_cursor = has_next_page
+            .then(|| {
+                claims
+                    .last()
+                    .map(|claim| format_cursor(claim.created_at, &claim.event_id))
+            })
+            .flatten();
+
+        let encrypted_preferences =
+            preference.is_some_and(|event| !event.event.content.trim().is_empty());
+        let unresolved_external = selected_sources.iter().any(|source| {
+            source
+                .relay
+                .as_deref()
+                .is_some_and(|relay| !same_relay(relay, self.relay_url))
+                && !matched_sources.contains(&(source.pubkey.clone(), source.result_tag.clone()))
+        });
+        let partial = truncated_sources
+            || encrypted_preferences
+            || unresolved_external
+            || event_window_truncated;
+        let resolution = if partial {
+            ResolutionState::Partial
+        } else {
+            ResolutionState::Complete
+        };
+        let mut diagnostics = vec![SourceDiagnostic {
+            source_id: "relay-local".to_string(),
+            resolution: ResolutionState::Complete,
+            detail: None,
+        }];
+        if encrypted_preferences {
+            diagnostics.push(SourceDiagnostic {
+                source_id: "nip85-private-sources".to_string(),
+                resolution: ResolutionState::Partial,
+                detail: Some(
+                    "encrypted kind 10040 source selections cannot be decrypted by the relay"
+                        .to_string(),
+                ),
+            });
+        }
+        if truncated_sources {
+            diagnostics.push(SourceDiagnostic {
+                source_id: "nip85-public-sources".to_string(),
+                resolution: ResolutionState::Partial,
+                detail: Some(format!(
+                    "source selection exceeds the bounded limit of {LOCAL_SOURCE_LIMIT}"
+                )),
+            });
+        }
+        if unresolved_external {
+            diagnostics.push(SourceDiagnostic {
+                source_id: "nip85-external-relays".to_string(),
+                resolution: ResolutionState::Partial,
+                detail: Some(
+                    "one or more selected assertions are not replicated locally; external relays were not contacted"
+                        .to_string(),
+                ),
+            });
+        }
+        if event_window_truncated {
+            diagnostics.push(SourceDiagnostic {
+                source_id: "relay-local-window".to_string(),
+                resolution: ResolutionState::Partial,
+                detail: Some(format!(
+                    "matching event history exceeds the bounded {LOCAL_EVENT_LIMIT}-event provider window"
+                )),
+            });
+        }
+
+        let people = people_from_claims(&claims);
+        let vouches = vouches_from_claims(&claims);
+        let values = claims
+            .into_iter()
+            .map(|claim| claim.value)
+            .collect::<Vec<_>>();
+        let response = (
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "channelId": self.channel_id,
+                "cg": format!("urn:buzz:relay-reputation:{}:{}", self.community, self.channel_id),
+                "operation": "trust_network",
+                "result": {
+                    "completeness": if partial { "partial" } else { "complete" },
+                    "people": people,
+                    "vouches": vouches,
+                    "claims": values,
+                    "nextCursor": next_cursor,
+                }
+            })),
+        );
+        Ok(LocalTrustResult {
+            response,
+            resolution,
+            diagnostics,
+        })
+    }
+}
+
+#[async_trait]
+impl ReputationProvider for LocalProvider<'_> {
+    async fn attestations(&self, request: &Value) -> ReputationBatch {
+        let result = self.resolve(request).await;
+        ReputationBatch::local(result.resolution, result.response, result.diagnostics)
+    }
+}
+
+fn parse_timestamp(raw: Option<i64>, field: &str) -> Result<Option<DateTime<Utc>>, String> {
+    raw.map(|timestamp| {
+        Utc.timestamp_opt(timestamp, 0)
+            .single()
+            .ok_or_else(|| format!("{field} is outside the supported Unix timestamp range"))
+    })
+    .transpose()
+}
+
+fn validate_trust_arguments(arguments: &TrustQueryArguments) -> Result<(), String> {
+    let since = parse_timestamp(arguments.since, "since")?;
+    let until = parse_timestamp(arguments.until, "until")?;
+    if since.zip(until).is_some_and(|(since, until)| since > until) {
+        return Err("since must not be later than until".to_string());
+    }
+    if let Some(cursor) = arguments.cursor.as_deref() {
+        parse_cursor(cursor)?;
+    }
+    Ok(())
+}
+
+fn parse_cursor(raw: &str) -> Result<(u64, String), String> {
+    let (timestamp, event_id) = raw
+        .split_once(':')
+        .ok_or_else(|| "cursor must be <unix-seconds>:<event-id>".to_string())?;
+    let timestamp = timestamp
+        .parse::<u64>()
+        .map_err(|_| "cursor timestamp is invalid".to_string())?;
+    if event_id.len() != 64 || !event_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("cursor event id is invalid".to_string());
+    }
+    Ok((timestamp, event_id.to_ascii_lowercase()))
+}
+
+fn format_cursor(timestamp: u64, event_id: &str) -> String {
+    format!("{timestamp}:{event_id}")
+}
+
+fn selected_sources(event: &nostr::Event) -> (Vec<SelectedSource>, bool) {
+    let mut sources = Vec::new();
+    let mut seen = HashSet::new();
+    let mut truncated = false;
+    for tag in event.tags.iter() {
+        let parts = tag.as_slice();
+        if parts.len() < 2
+            || !parts[0].starts_with("30382:")
+            || parts[1].len() != 64
+            || !parts[1].bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            continue;
+        }
+        let result_tag = parts[0]["30382:".len()..].to_string();
+        if result_tag.is_empty() {
+            continue;
+        }
+        let source = SelectedSource {
+            result_tag,
+            pubkey: parts[1].to_ascii_lowercase(),
+            relay: parts
+                .get(2)
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+        };
+        if !seen.insert(source.clone()) {
+            continue;
+        }
+        if sources.len() == LOCAL_SOURCE_LIMIT {
+            truncated = true;
+            continue;
+        }
+        sources.push(source);
+    }
+    (sources, truncated)
+}
+
+fn same_relay(left: &str, right: &str) -> bool {
+    fn key(raw: &str) -> Option<(String, String, Option<u16>, String)> {
+        let url = url::Url::parse(raw).ok()?;
+        let transport = match url.scheme() {
+            "ws" | "http" => "plain",
+            "wss" | "https" => "tls",
+            _ => return None,
+        };
+        Some((
+            transport.to_string(),
+            url.host_str()?.to_ascii_lowercase(),
+            url.port_or_known_default(),
+            url.path().trim_end_matches('/').to_string(),
+        ))
+    }
+    key(left)
+        .zip(key(right))
+        .is_some_and(|(left, right)| left == right)
+}
+
+fn tag_values(event: &nostr::Event, name: &str) -> Vec<Vec<String>> {
+    event
+        .tags
+        .iter()
+        .filter_map(|tag| {
+            let parts = tag.as_slice();
+            (parts.first().map(String::as_str) == Some(name)).then(|| parts.to_vec())
+        })
+        .collect()
+}
+
+fn first_tag_value(event: &nostr::Event, name: &str) -> Option<String> {
+    tag_values(event, name)
+        .into_iter()
+        .find_map(|parts| parts.get(1).cloned())
+}
+
+fn label_value(event: &nostr::Event) -> Option<String> {
+    event.tags.iter().find_map(|tag| {
+        let parts = tag.as_slice();
+        (parts.len() >= 3 && parts[0] == "l" && parts[2] == "buzz.wot").then(|| parts[1].clone())
+    })
+}
+
+fn source_document(stored: &StoredEvent) -> Value {
+    json!({
+        "eventId": stored.event.id.to_hex(),
+        "kind": stored.event.kind.as_u16(),
+        "digest": stored.event.id.to_hex(),
+        "author": stored.event.pubkey.to_hex(),
+        "signature": stored.event.sig.to_string(),
+        "verified": stored.is_verified(),
+        "event": serde_json::to_value(&stored.event).unwrap_or(Value::Null),
+    })
+}
+
+fn normalize_vouch_claims(
+    events: &[StoredEvent],
+    community: CommunityId,
+    channel_id: Uuid,
+) -> Vec<NormalizedClaim> {
+    let mut base = HashMap::<String, (&StoredEvent, String)>::new();
+    for stored in events {
+        if label_value(&stored.event).as_deref() != Some("vouch") {
+            continue;
+        }
+        if let Some(subject) = first_tag_value(&stored.event, "p") {
+            base.insert(
+                stored.event.id.to_hex(),
+                (stored, subject.to_ascii_lowercase()),
+            );
+        }
+    }
+
+    let mut lifecycle = HashMap::<String, (&StoredEvent, &'static str, Option<String>)>::new();
+    for stored in events {
+        let Some((status, action)) = (match label_value(&stored.event).as_deref() {
+            Some("revoke") => Some(("revoked", "revoke")),
+            Some("supersede") => Some(("superseded", "supersede")),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let Some(subject) = first_tag_value(&stored.event, "p") else {
+            continue;
+        };
+        let target = stored.event.tags.iter().find_map(|tag| {
+            let parts = tag.as_slice();
+            (parts.len() >= 4 && parts[0] == "e" && parts[3] == "target")
+                .then(|| parts[1].to_ascii_lowercase())
+        });
+        let Some(target) = target else { continue };
+        let Some((target_event, target_subject)) = base.get(&target) else {
+            continue;
+        };
+        if target_event.event.pubkey != stored.event.pubkey
+            || target_subject != &subject.to_ascii_lowercase()
+        {
+            continue;
+        }
+        let replacement = (action == "supersede")
+            .then(|| {
+                stored.event.tags.iter().find_map(|tag| {
+                    let parts = tag.as_slice();
+                    (parts.len() >= 4 && parts[0] == "e" && parts[3] == "replacement")
+                        .then(|| parts[1].to_ascii_lowercase())
+                })
+            })
+            .flatten();
+        if action == "supersede"
+            && !replacement.as_ref().is_some_and(|replacement| {
+                base.get(replacement)
+                    .is_some_and(|(replacement_event, replacement_subject)| {
+                        replacement_event.event.pubkey == stored.event.pubkey
+                            && replacement_subject == &subject.to_ascii_lowercase()
+                    })
+            })
+        {
+            continue;
+        }
+        lifecycle
+            .entry(target)
+            .or_insert((stored, status, replacement));
+    }
+
+    let now = Utc::now().timestamp().max(0) as u64;
+    base.into_iter()
+        .map(|(event_id, (stored, subject))| {
+            let created_at = stored.event.created_at.as_secs();
+            let expiration = first_tag_value(&stored.event, "expiration")
+                .and_then(|value| value.parse::<u64>().ok());
+            let lifecycle_event = lifecycle.get(&event_id);
+            let status = lifecycle_event
+                .map(|(_, status, _)| *status)
+                .or_else(|| expiration.filter(|expires| *expires <= now).map(|_| "expired"))
+                .unwrap_or("active");
+            let issuer = stored.event.pubkey.to_hex();
+            let evidence = stored
+                .event
+                .tags
+                .iter()
+                .filter_map(|tag| {
+                    let parts = tag.as_slice();
+                    match parts.first().map(String::as_str) {
+                        Some("r") => parts.get(1).map(|value| {
+                            json!({"type": "uri", "value": value})
+                        }),
+                        Some("e") if parts.get(3).map(String::as_str) == Some("evidence") => {
+                            parts.get(1).map(|value| {
+                                json!({"type": "nostr_event", "value": format!("urn:nostr:event:{value}")})
+                            })
+                        }
+                        _ => None,
+                    }
+                })
+                .collect::<Vec<_>>();
+            let lifecycle_value = lifecycle_event.map(|(event, _, replacement)| {
+                json!({
+                    "eventId": event.event.id.to_hex(),
+                    "source": source_document(event),
+                    "replacementClaim": replacement,
+                })
+            });
+            let value = json!({
+                "schemaVersion": "buzz-trust-claim@1",
+                "claimId": event_id,
+                "subject": subject,
+                "issuer": issuer,
+                "claimType": "vouch",
+                "claimLayer": "observation",
+                "scope": {
+                    "community": community.to_string(),
+                    "channel": channel_id,
+                    "visibility": "channel",
+                },
+                "source": source_document(stored),
+                "createdAt": created_at,
+                "expiresAt": expiration,
+                "status": status,
+                "derivedFrom": evidence,
+                "lifecycle": lifecycle_value,
+                "note": stored.event.content,
+            });
+            NormalizedClaim {
+                created_at,
+                event_id: stored.event.id.to_hex(),
+                issuer: stored.event.pubkey.to_hex(),
+                subject,
+                claim_type: "vouch",
+                value,
+            }
+        })
+        .collect()
+}
+
+fn normalize_assertion_claims(
+    events: &[StoredEvent],
+    selected: &[SelectedSource],
+    community: CommunityId,
+) -> (Vec<NormalizedClaim>, HashSet<(String, String)>) {
+    let selection = selected
+        .iter()
+        .map(|source| ((source.pubkey.clone(), source.result_tag.clone()), source))
+        .collect::<HashMap<_, _>>();
+    let mut matched = HashSet::new();
+    let mut claims = Vec::new();
+    for stored in events {
+        let issuer = stored.event.pubkey.to_hex();
+        let Some(subject) = first_tag_value(&stored.event, "d") else {
+            continue;
+        };
+        let mut assertions = BTreeMap::<String, Vec<String>>::new();
+        for tag in stored.event.tags.iter() {
+            let parts = tag.as_slice();
+            let Some(name) = parts.first() else { continue };
+            if !selection.contains_key(&(issuer.clone(), name.clone())) {
+                continue;
+            }
+            let values = parts.iter().skip(1).cloned().collect::<Vec<_>>();
+            if values.is_empty() {
+                continue;
+            }
+            matched.insert((issuer.clone(), name.clone()));
+            assertions.insert(name.clone(), values);
+        }
+        if assertions.is_empty() {
+            continue;
+        }
+        let created_at = stored.event.created_at.as_secs();
+        let expiration = first_tag_value(&stored.event, "expiration")
+            .and_then(|value| value.parse::<u64>().ok());
+        let status = if expiration.is_some_and(|expires| expires <= Utc::now().timestamp() as u64) {
+            "expired"
+        } else {
+            "active"
+        };
+        let value = json!({
+            "schemaVersion": "buzz-trust-claim@1",
+            "claimId": stored.event.id.to_hex(),
+            "subject": subject,
+            "issuer": issuer,
+            "claimType": "nip85_user_assertion",
+            "claimLayer": "derived_analysis",
+            "scope": {
+                "community": community.to_string(),
+                "visibility": "community",
+            },
+            "source": source_document(stored),
+            "createdAt": created_at,
+            "expiresAt": expiration,
+            "status": status,
+            "derivedFrom": [],
+            "assertions": assertions,
+        });
+        claims.push(NormalizedClaim {
+            created_at,
+            event_id: stored.event.id.to_hex(),
+            issuer: stored.event.pubkey.to_hex(),
+            subject: subject.to_ascii_lowercase(),
+            claim_type: "nip85_user_assertion",
+            value,
+        });
+    }
+    (claims, matched)
+}
+
+fn people_from_claims(claims: &[NormalizedClaim]) -> Vec<Value> {
+    #[derive(Default)]
+    struct Person {
+        latest: u64,
+        received: usize,
+        given: usize,
+    }
+    let mut people = BTreeMap::<String, Person>::new();
+    for claim in claims {
+        people.entry(claim.subject.clone()).or_default().latest = people
+            .get(&claim.subject)
+            .map_or(claim.created_at, |person| {
+                person.latest.max(claim.created_at)
+            });
+        if claim.claim_type == "vouch" && claim.value["status"] == "active" {
+            people.entry(claim.subject.clone()).or_default().received += 1;
+            people.entry(claim.issuer.clone()).or_default().given += 1;
+            people.entry(claim.issuer.clone()).or_default().latest = people
+                .get(&claim.issuer)
+                .map_or(claim.created_at, |person| {
+                    person.latest.max(claim.created_at)
+                });
+        }
+    }
+    people
+        .into_iter()
+        .map(|(pubkey, person)| {
+            json!({
+                "pubkey": pubkey,
+                "contributions": 0,
+                "latest": person.latest,
+                "vouchesReceived": person.received,
+                "vouchesGiven": person.given,
+                "layer": "SWM",
+            })
+        })
+        .collect()
+}
+
+fn vouches_from_claims(claims: &[NormalizedClaim]) -> Vec<Value> {
+    claims
+        .iter()
+        .filter(|claim| claim.claim_type == "vouch")
+        .map(|claim| {
+            let lifecycle = claim
+                .value
+                .get("lifecycle")
+                .filter(|value| !value.is_null());
+            let evidence = claim.value["derivedFrom"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|item| item.get("value").cloned())
+                .collect::<Vec<_>>();
+            json!({
+                "uri": format!("urn:buzz-dkg:vouch:{}", claim.event_id),
+                "issuer": claim.issuer,
+                "subject": claim.subject,
+                "note": claim.value["note"],
+                "status": claim.value["status"],
+                "at": claim.created_at,
+                "sourceEvent": format!("urn:nostr:event:{}", claim.event_id),
+                "evidence": evidence,
+                "lifecycleEvent": lifecycle.and_then(|value| value.get("eventId")),
+                "replacementVouch": lifecycle.and_then(|value| value.get("replacementClaim")),
+                "layer": "SWM",
+            })
+        })
+        .collect()
 }
 
 /// Adapter for the existing bounded OriginTrail DKG trust operations.
@@ -304,17 +1075,43 @@ fn validate_gateway_success(
 pub enum ConfiguredReputationProvider<'a> {
     /// Deterministic default when reputation is not configured.
     Null(NullProvider),
+    /// Signed NIP-32/NIP-85 evidence resolved from this relay.
+    Local(LocalProvider<'a>),
     /// Existing OriginTrail DKG trust-query adapter.
     Dkg(DkgProvider<'a>),
 }
 
 impl<'a> ConfiguredReputationProvider<'a> {
-    /// Select the configured DKG adapter or the null provider.
-    pub fn from_dkg_config(config: Option<&'a DkgQueryConfig>) -> Self {
-        match config.filter(|config| config.trust_enabled) {
-            Some(config) => Self::Dkg(DkgProvider::new(config)),
-            None => Self::Null(NullProvider),
+    /// Select the configured provider without allowing request input to choose
+    /// a backend or tenant scope.
+    pub fn from_config(
+        kind: ReputationProviderKind,
+        dkg_config: Option<&'a DkgQueryConfig>,
+        db: &'a Db,
+        community: CommunityId,
+        channel_id: Uuid,
+        requester_pubkey: Vec<u8>,
+        relay_url: &'a str,
+    ) -> Self {
+        match kind {
+            ReputationProviderKind::Local => Self::Local(LocalProvider::new(
+                db,
+                community,
+                channel_id,
+                requester_pubkey,
+                relay_url,
+            )),
+            ReputationProviderKind::Dkg => match dkg_config.filter(|config| config.trust_enabled) {
+                Some(config) => Self::Dkg(DkgProvider::new(config)),
+                None => Self::Null(NullProvider),
+            },
+            ReputationProviderKind::Disabled => Self::Null(NullProvider),
         }
+    }
+
+    #[cfg(test)]
+    fn disabled() -> Self {
+        Self::Null(NullProvider)
     }
 }
 
@@ -323,6 +1120,7 @@ impl ReputationProvider for ConfiguredReputationProvider<'_> {
     async fn attestations(&self, request: &Value) -> ReputationBatch {
         match self {
             Self::Null(provider) => provider.attestations(request).await,
+            Self::Local(provider) => provider.attestations(request).await,
             Self::Dkg(provider) => provider.attestations(request).await,
         }
     }
@@ -345,10 +1143,102 @@ fn resolution_from_gateway(value: &Value) -> ResolutionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    fn stored_event(
+        keys: &Keys,
+        kind: u16,
+        content: &str,
+        tags: Vec<Tag>,
+        channel_id: Option<Uuid>,
+    ) -> StoredEvent {
+        let event = EventBuilder::new(Kind::Custom(kind), content)
+            .tags(tags)
+            .sign_with_keys(keys)
+            .expect("sign fixture event");
+        StoredEvent::with_received_at(event, Utc::now(), channel_id, true)
+    }
+
+    fn tag(parts: &[&str]) -> Tag {
+        Tag::parse(parts.iter().copied()).expect("valid fixture tag")
+    }
+
+    #[derive(Debug)]
+    struct FixtureProvider {
+        state: ResolutionState,
+    }
+
+    #[async_trait]
+    impl ReputationProvider for FixtureProvider {
+        async fn attestations(&self, _request: &Value) -> ReputationBatch {
+            ReputationBatch {
+                resolution: self.state,
+                provider_id: "fixture",
+                provider_version: "1",
+                as_of: Utc::now(),
+                source_diagnostics: vec![SourceDiagnostic {
+                    source_id: "fixture-source".to_string(),
+                    resolution: self.state,
+                    detail: None,
+                }],
+                response: Some(if self.state == ResolutionState::Unavailable {
+                    api_error(StatusCode::SERVICE_UNAVAILABLE, "fixture unavailable")
+                } else {
+                    (
+                        StatusCode::OK,
+                        Json(json!({
+                            "ok": true,
+                            "channelId": Uuid::nil(),
+                            "cg": "fixture",
+                            "operation": "trust_network",
+                            "result": {
+                                "completeness": if self.state == ResolutionState::Partial {
+                                    "partial"
+                                } else {
+                                    "complete"
+                                },
+                                "claims": [],
+                            }
+                        })),
+                    )
+                }),
+            }
+        }
+    }
+
+    async fn assert_provider_conformance(
+        provider: &dyn ReputationProvider,
+        expected: ResolutionState,
+    ) {
+        let batch = provider.attestations(&json!({})).await;
+        assert_eq!(batch.resolution, expected);
+        assert!(!batch.provider_id.is_empty());
+        assert!(!batch.provider_version.is_empty());
+        assert!(batch.as_of <= Utc::now());
+        if expected == ResolutionState::Disabled {
+            assert!(batch.source_diagnostics.is_empty());
+        } else {
+            assert!(batch
+                .source_diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.source_id.is_empty()));
+        }
+        let response = batch.into_http_result();
+        match expected {
+            ResolutionState::Complete | ResolutionState::Partial => {
+                let (_, Json(value)) = response.expect("resolved provider succeeds");
+                assert_eq!(value["resolution"], json!(expected));
+            }
+            ResolutionState::Disabled | ResolutionState::Unavailable => {
+                let (_, Json(value)) = response.expect_err("unresolved provider fails");
+                assert_eq!(value["resolution"], json!(expected));
+            }
+        }
+    }
 
     #[tokio::test]
     async fn null_provider_is_disabled_not_empty_complete() {
-        let provider = ConfiguredReputationProvider::from_dkg_config(None);
+        let provider = ConfiguredReputationProvider::disabled();
         let batch = provider.attestations(&serde_json::json!({})).await;
         assert_eq!(batch.resolution, ResolutionState::Disabled);
         assert_eq!(batch.provider_id, "null");
@@ -360,6 +1250,120 @@ mod tests {
         assert_eq!(error.0, StatusCode::NOT_FOUND);
         assert_eq!(error.1 .0["resolution"], "disabled");
         assert_eq!(error.1 .0["providerId"], "null");
+    }
+
+    #[tokio::test]
+    async fn providers_share_resolution_and_diagnostic_conformance() {
+        assert_provider_conformance(&NullProvider, ResolutionState::Disabled).await;
+        for state in [
+            ResolutionState::Complete,
+            ResolutionState::Partial,
+            ResolutionState::Unavailable,
+        ] {
+            assert_provider_conformance(&FixtureProvider { state }, state).await;
+        }
+    }
+
+    #[test]
+    fn nip85_selection_is_exact_per_result_tag_and_bounded() {
+        let provider = Keys::generate().public_key().to_hex();
+        let event = stored_event(
+            &Keys::generate(),
+            10040,
+            "",
+            vec![
+                tag(&["30382:rank", &provider, "wss://relay.example"]),
+                tag(&["30382:rank", &provider, "wss://relay.example"]),
+                tag(&["30382:followers", &provider]),
+                tag(&["30383:rank", &provider]),
+            ],
+            None,
+        );
+        let (sources, truncated) = selected_sources(&event.event);
+        assert!(!truncated);
+        assert_eq!(sources.len(), 2);
+        assert!(sources.iter().any(|source| source.result_tag == "rank"));
+        assert!(sources
+            .iter()
+            .any(|source| source.result_tag == "followers"));
+    }
+
+    #[test]
+    fn local_claims_preserve_signed_evidence_and_lifecycle() {
+        let channel = Uuid::new_v4();
+        let community = CommunityId::from_uuid(Uuid::new_v4());
+        let issuer = Keys::generate();
+        let subject = Keys::generate().public_key().to_hex();
+        let vouch = stored_event(
+            &issuer,
+            1985,
+            "Built the release pipeline",
+            vec![
+                tag(&["h", &channel.to_string()]),
+                tag(&["L", "buzz.wot"]),
+                tag(&["l", "vouch", "buzz.wot"]),
+                tag(&["p", &subject]),
+                tag(&["r", "https://example.test/evidence/1"]),
+            ],
+            Some(channel),
+        );
+        let revoke = stored_event(
+            &issuer,
+            1985,
+            "Evidence was withdrawn",
+            vec![
+                tag(&["h", &channel.to_string()]),
+                tag(&["L", "buzz.wot"]),
+                tag(&["l", "revoke", "buzz.wot"]),
+                tag(&["p", &subject]),
+                tag(&["e", &vouch.event.id.to_hex(), "", "target"]),
+            ],
+            Some(channel),
+        );
+        let claims = normalize_vouch_claims(&[revoke, vouch], community, channel);
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].value["status"], "revoked");
+        assert_eq!(
+            claims[0].value["derivedFrom"][0]["value"],
+            "https://example.test/evidence/1"
+        );
+        assert_eq!(claims[0].value["source"]["verified"], true);
+        assert!(claims[0].value["source"]["event"]["sig"].is_string());
+        assert!(claims[0].value["lifecycle"]["source"]["eventId"].is_string());
+    }
+
+    #[test]
+    fn trusted_assertions_include_only_viewer_selected_results() {
+        let community = CommunityId::from_uuid(Uuid::new_v4());
+        let provider = Keys::generate();
+        let subject = Keys::generate().public_key().to_hex();
+        let assertion = stored_event(
+            &provider,
+            30382,
+            "",
+            vec![
+                tag(&["d", &subject]),
+                tag(&["rank", "89"]),
+                tag(&["followers", "123"]),
+            ],
+            None,
+        );
+        let selected = vec![SelectedSource {
+            result_tag: "rank".to_string(),
+            pubkey: provider.public_key().to_hex(),
+            relay: None,
+        }];
+        let (claims, matched) = normalize_assertion_claims(&[assertion], &selected, community);
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].value["assertions"]["rank"], json!(["89"]));
+        assert!(claims[0].value["assertions"].get("followers").is_none());
+        assert!(matched.contains(&(provider.public_key().to_hex(), "rank".to_string())));
+    }
+
+    #[test]
+    fn relay_hint_comparison_normalizes_http_and_websocket_schemes() {
+        assert!(same_relay("wss://relay.example/", "https://RELAY.example"));
+        assert!(!same_relay("wss://relay.example", "wss://other.example"));
     }
 
     #[test]
