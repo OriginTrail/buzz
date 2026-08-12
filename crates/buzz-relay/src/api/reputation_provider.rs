@@ -269,10 +269,10 @@ fn validate_gateway_success(
     if response.get("operation").and_then(Value::as_str) != Some(expected_operation) {
         return Err("provider response operation did not match the authorized request");
     }
-    if !response
+    if response
         .get("cg")
         .and_then(Value::as_str)
-        .is_some_and(|value| !value.is_empty())
+        .is_none_or(str::is_empty)
     {
         return Err("provider response omitted the resolved Context Graph");
     }
