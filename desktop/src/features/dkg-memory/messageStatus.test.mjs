@@ -341,4 +341,47 @@ test("relay discovery mirrors the ACP memory capability contract", () => {
     }).reputation,
     false,
   );
+  assert.deepEqual(
+    parseDkgMemoryCapabilities({
+      supported_extensions: ["buzz-reputation-v1"],
+      reputation: {
+        contract: "buzz-reputation@1",
+        claim_schema: "buzz-trust-claim@1",
+        operations: ["trust_network"],
+      },
+    }),
+    {
+      memory: false,
+      semanticQuery: false,
+      trust: true,
+      reputation: false,
+    },
+  );
+  assert.deepEqual(
+    parseDkgMemoryCapabilities({
+      supported_extensions: ["buzz-reputation-v1"],
+      reputation: {
+        contract: "buzz-reputation@1",
+        claim_schema: "buzz-trust-claim@1",
+        operations: ["trust_network", "reputation_summary"],
+      },
+    }),
+    {
+      memory: false,
+      semanticQuery: false,
+      trust: true,
+      reputation: true,
+    },
+  );
+  assert.equal(
+    parseDkgMemoryCapabilities({
+      supported_extensions: ["buzz-reputation-v1"],
+      reputation: {
+        contract: "buzz-reputation@1",
+        claim_schema: "wrong-schema",
+        operations: ["trust_network"],
+      },
+    }).trust,
+    false,
+  );
 });

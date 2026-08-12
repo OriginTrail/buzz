@@ -135,6 +135,38 @@ export interface TrustVouch {
   layer: "SWM" | "VM";
 }
 
+export interface TrustClaimSource {
+  eventId: string;
+  kind: number;
+  digest: string;
+  author: string;
+  signature: string;
+  verified: boolean;
+  event: unknown;
+}
+
+/** Provider-neutral projection of a signed native Nostr trust event. */
+export interface TrustClaim {
+  schemaVersion: "buzz-trust-claim@1";
+  claimId: string;
+  subject: string;
+  issuer: string;
+  claimType: "vouch" | "nip85_user_assertion";
+  claimLayer: "observation" | "derived_analysis";
+  scope: {
+    community: string;
+    channel?: string;
+    visibility: "channel" | "community";
+  };
+  source: TrustClaimSource;
+  createdAt: number;
+  expiresAt: number | null;
+  status: "active" | "expired" | "revoked" | "superseded";
+  derivedFrom: Array<{ type: "uri" | "nostr_event"; value: string }>;
+  note?: string;
+  assertions?: Record<string, string[]>;
+}
+
 export interface WorkEvidence {
   uri: string;
   kind: string;
@@ -150,6 +182,8 @@ export interface TrustNetwork extends Partial<ReputationProviderMetadata> {
   completeness: "complete" | "partial";
   people: TrustPerson[];
   vouches: TrustVouch[];
+  claims?: TrustClaim[];
+  nextCursor?: string | null;
 }
 
 export interface ReputationSummary extends Partial<ReputationProviderMetadata> {
@@ -505,11 +539,12 @@ export async function fetchDecisionTrace(
 /** Read the channel's evidence-backed trust network without computing a score. */
 export async function fetchTrustNetwork(
   channelId: string,
+  page: { limit?: number; cursor?: string; since?: number; until?: number } = {},
 ): Promise<TrustNetwork> {
   return queryDkgProvider<TrustNetwork, "trust_network">({
     channelId,
     operation: "trust_network",
-    arguments: {},
+    arguments: page,
     localPath: null,
   });
 }

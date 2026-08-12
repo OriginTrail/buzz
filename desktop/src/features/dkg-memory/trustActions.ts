@@ -1,7 +1,8 @@
 import { relayClient } from "@/shared/api/relayClient";
-import { signRelayEvent } from "@/shared/api/tauri";
+import { getRelayHttpUrl, signRelayEvent } from "@/shared/api/tauri";
 import type { RelayEvent } from "@/shared/api/types";
 import type { WorkEvidence } from "./api";
+import { fetchDkgMemoryCapabilities } from "./capabilities";
 import { postAuthenticatedDkgJson } from "./provider";
 import {
   memoryProposalProgress,
@@ -127,11 +128,31 @@ async function postTrustMemoryProposal(
   return { ...result, ...normalizeMemoryProposalResponse(result, status) };
 }
 
+async function relayProjectsTrustToDkg(): Promise<boolean> {
+  try {
+    const relay = (await getRelayHttpUrl()).replace(/\/+$/, "");
+    return (await fetchDkgMemoryCapabilities(relay)).memory;
+  } catch {
+    // Discovery failure is not proof that projection is disabled. Preserve
+    // the durable DKG path and let its authenticated request decide.
+    return true;
+  }
+}
+
 async function publishAndProjectTrustSource(
   channelId: string,
   source: RelayEvent,
   content: Record<string, unknown>,
 ): Promise<{ eventId: string; state?: string }> {
+  if (!(await relayProjectsTrustToDkg())) {
+    await relayClient.publishEvent(
+      source,
+      "The signed trust event timed out before the relay confirmed it.",
+      "The relay could not publish the signed trust event.",
+    );
+    clearProjection(source.id);
+    return { eventId: source.id, state: "stored" };
+  }
   const proposal = await signRelayEvent({
     kind: 40009,
     content: JSON.stringify(content),
@@ -186,6 +207,7 @@ export async function retryPendingTrustProjections(
   const pending = readProjectionOutbox().filter(
     (entry) => entry.channelId === channelId,
   );
+  const projectionEnabled = await relayProjectsTrustToDkg();
   let completed = 0;
   for (const entry of pending) {
     try {
@@ -197,6 +219,11 @@ export async function retryPendingTrustProjections(
         );
         entry.sourcePublished = true;
         queueProjection(entry);
+      }
+      if (!projectionEnabled) {
+        clearProjection(entry.sourceEventId);
+        completed += 1;
+        continue;
       }
       const result = await postTrustMemoryProposal(entry.proposalBody);
       if (memoryProposalProgress(result.state) === "stored") {
