@@ -501,9 +501,8 @@ pub fn spawn_agent_child(
     let effective_relay_url = runtime_key.relay_url.clone();
 
     // Augment PATH for DMG launches so child processes can find:
-    //   - bundled CLI via ~/.local/bin symlink
+    //   - sidecars from the currently running app before older installed CLI symlinks
     //   - nvm-managed node/npm (nvm initializes only in interactive shells)
-    //   - bundled sidecars (buzz, buzz-acp, etc.) via exe parent (Contents/MacOS/)
     //   - runtimes (node, python, etc.) via login shell PATH
     let nvm_bin = dirs::home_dir()
         .as_deref()

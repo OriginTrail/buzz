@@ -491,6 +491,9 @@ pub const KIND_STREAM_MESSAGE_SCHEDULED: u32 = 40006;
 pub const KIND_STREAM_REMINDER: u32 = 40007;
 /// A diff/patch message showing file changes (unified diff format).
 pub const KIND_STREAM_MESSAGE_DIFF: u32 = 40008;
+/// Agent-authored semantic memory proposal, submitted through the authenticated DKG route.
+/// The event is signed evidence but is not persisted in relay history.
+pub const KIND_DKG_MEMORY_PROPOSAL: u32 = 40009;
 /// Canvas (shared document) for a channel.
 pub const KIND_CANVAS: u32 = 40100;
 /// System message for channel state changes (join, leave, rename, etc.).

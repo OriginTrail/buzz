@@ -70,6 +70,7 @@ export type ThreadDepthGuideAction = {
 
 export const MessageRow = React.memo(
   function MessageRow({
+    bodyAdornment,
     channelId = null,
     currentPubkey,
     collapseDepthGuideActions,
@@ -111,6 +112,7 @@ export const MessageRow = React.memo(
     videoReviewCommentRootId,
     videoReviewContext,
   }: {
+    bodyAdornment?: React.ReactNode;
     channelId?: string | null;
     currentPubkey?: string;
     collapseDepthGuideActions?: ReadonlyArray<ThreadDepthGuideAction>;
@@ -675,6 +677,7 @@ export const MessageRow = React.memo(
       <>
         <SentFromThreadLine channelId={channelId} tags={message.tags} />
         {renderBody()}
+        {bodyAdornment}
         {continuationMetadataNode}
         <MessageReactions
           messageId={message.id}
@@ -968,6 +971,7 @@ export const MessageRow = React.memo(
     prev.isFollowingThread === next.isFollowingThread &&
     prev.isUnread === next.isUnread &&
     prev.layoutVariant === next.layoutVariant &&
+    prev.bodyAdornment === next.bodyAdornment &&
     prev.onCollapseDepthGuide === next.onCollapseDepthGuide &&
     prev.onCollapseDepthGuideHoverChange ===
       next.onCollapseDepthGuideHoverChange &&

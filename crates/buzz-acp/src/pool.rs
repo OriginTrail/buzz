@@ -579,6 +579,10 @@ pub struct PromptContext {
     pub cwd: String,
     /// REST client for pre-prompt context fetches (thread/DM history).
     pub rest_client: RestClient,
+    /// Whether the active relay advertises authenticated semantic DKG queries.
+    /// When true, each substantive channel turn gets a bounded, fail-open
+    /// relevant-memory lookup before the agent starts work.
+    pub dkg_semantic_query: bool,
     /// Shared channel metadata for startup-known and dynamically joined channels.
     pub channel_info: ChannelInfoResolver,
     /// Max messages to include in thread/DM context. 0 = disabled.
@@ -2032,7 +2036,7 @@ pub async fn run_prompt_task(
             );
         }
 
-        crate::queue::format_prompt(
+        let mut sections = crate::queue::format_prompt(
             b,
             &crate::queue::FormatPromptArgs {
                 agent_core: standing.agent_core,
@@ -2047,7 +2051,16 @@ pub async fn run_prompt_task(
                 agent_canvas: standing.agent_canvas,
                 standing_context_sent,
             },
+        );
+        let rest_client = &ctx.rest_client;
+        crate::dkg_recall::append_for_batch(
+            &mut sections,
+            ctx.dkg_semantic_query,
+            b,
+            |request| async move { rest_client.query_dkg(&request).await },
         )
+        .await;
+        sections
     } else {
         // Should not happen — batch is None only for heartbeats which have prompt_text.
         // Return the agent to the pool to prevent a permanent slot leak.
@@ -7456,6 +7469,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
                 keys: agent_keys.clone(),
                 auth_tag_json: None,
             },
+            dkg_semantic_query: false,
             channel_info: ChannelInfoResolver::new(
                 std::collections::HashMap::new(),
                 RestClient {

@@ -59,6 +59,7 @@ type TimelineMessageListProps = {
   isMessageUnreadById?: (messageId: string) => boolean;
   entranceMessageId?: string | null;
   onEntranceMessageComplete?: (messageId: string) => void;
+  messageBodyAdornments?: ReadonlyMap<string, React.ReactNode>;
   messageFooters?: Record<string, React.ReactNode>;
   /** Hoisted main-timeline entries (computed once in ChannelPane). Falls back
    *  to deriving them here when omitted (e.g. the deferred-render pass). */
@@ -136,6 +137,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
   isMessageUnreadById,
   entranceMessageId = null,
   onEntranceMessageComplete,
+  messageBodyAdornments,
   messageFooters,
   mainEntries,
   threadSummaries,
@@ -262,6 +264,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
               }
               isFollowingThreadById={isFollowingThreadById}
               isUnread={isMessageUnreadById?.(item.entry.message.id)}
+              bodyAdornment={messageBodyAdornments?.get(item.entry.message.id)}
               playEntrance={item.entry.message.id === entranceMessageId}
               onEntranceComplete={onEntranceMessageComplete}
               onDelete={onDelete}
@@ -297,6 +300,7 @@ export const TimelineMessageList = React.memo(function TimelineMessageList({
       isMessageUnreadById,
       entranceMessageId,
       onEntranceMessageComplete,
+      messageBodyAdornments,
       messageFooters,
       onDelete,
       onEdit,

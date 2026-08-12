@@ -19,6 +19,10 @@ export default defineConfig({
     {
       name: "smoke",
       testMatch: [
+        "**/dkg-memory-beta.spec.ts",
+        "**/dkg-memory-dock.spec.ts",
+        "**/dkg-memory-fallback.spec.ts",
+        "**/dkg-memory-demo.spec.ts",
         "**/smoke.spec.ts",
         "**/search-scope-screenshots.spec.ts",
         "**/onboarding-docked-cta-screenshots.spec.ts",

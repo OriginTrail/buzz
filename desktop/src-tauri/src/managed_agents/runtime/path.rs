@@ -80,11 +80,11 @@ pub(crate) fn compose_path_entries(
 /// Assemble the augmented `PATH` for a launched managed-agent child process.
 ///
 /// Concatenates, in priority order:
-///   1. `<home>/.local/bin` — bundled CLI symlink
-///   2. Buzz-managed npm prefix bin dir — app-private ACP adapter shims
-///   3. Buzz-managed Node.js bin dir — app-private Node/npm runtime
-///   4. `nvm_bin` — nvm's default Node.js bin dir (if the user uses nvm)
-///   5. exe parent dir — DMG sidecars under `Contents/MacOS/`
+///   1. exe parent dir — sidecars belonging to the currently running app
+///   2. `<home>/.local/bin` — installed CLI symlink
+///   3. Buzz-managed npm prefix bin dir — app-private ACP adapter shims
+///   4. Buzz-managed Node.js bin dir — app-private Node/npm runtime
+///   5. `nvm_bin` — nvm's default Node.js bin dir (if the user uses nvm)
 ///   6. user's login-shell `PATH` — runtimes like node/python from other managers
 ///   7. the current process `PATH` — appended on every platform when no
 ///      login-shell PATH exists, because callers use `Command::env("PATH", …)`
@@ -113,6 +113,12 @@ pub(in crate::managed_agents) fn build_augmented_path(
 
     // Build the managed/prefix entries (everything before login-shell PATH).
     let mut managed: Vec<PathBuf> = Vec::new();
+    // The app that launched the agent is authoritative for bundled sidecars.
+    // In particular, a dev/TestFlight build must not pick up an older
+    // ~/.local/bin/buzz symlink owned by another installed Buzz version.
+    if let Some(parent) = exe_parent {
+        managed.push(parent);
+    }
     if let Some(home) = home {
         managed.push(home.join(".local").join("bin"));
     }
@@ -129,9 +135,6 @@ pub(in crate::managed_agents) fn build_augmented_path(
     }
     if let Some(nvm_bin) = nvm_bin {
         managed.push(nvm_bin);
-    }
-    if let Some(parent) = exe_parent {
-        managed.push(parent);
     }
 
     // Split the login-shell PATH into individual entries.
@@ -175,9 +178,8 @@ mod tests {
             None,
         );
         let result = result.expect("path");
-        assert!(result.starts_with("/home/agent/.local/bin:"), "{result}");
         assert!(
-            result.contains(":/Applications/Buzz.app/Contents/MacOS:"),
+            result.starts_with("/Applications/Buzz.app/Contents/MacOS:/home/agent/.local/bin:"),
             "{result}"
         );
         assert!(
@@ -200,7 +202,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn nvm_bin_inserted_after_local_bin_before_exe_parent() {
+    fn exe_parent_precedes_installed_cli_and_nvm() {
         let result = build_augmented_path(
             Some(PathBuf::from("/home/user")),
             Some(PathBuf::from("/Applications/Buzz.app/Contents/MacOS")),
@@ -215,7 +217,7 @@ mod tests {
         let exe = result
             .find("/Applications/Buzz.app/Contents/MacOS")
             .unwrap();
-        assert!(local < nvm && nvm < exe, "{result}");
+        assert!(exe < local && local < nvm, "{result}");
         assert!(result.ends_with(":/usr/bin:/bin"), "{result}");
     }
 
@@ -241,12 +243,11 @@ mod tests {
         }
 
         let result = result.expect("path");
-        assert!(result.starts_with("/home/user/.local/bin:"), "{result}");
-        assert!(!result.contains(".nvm"), "no nvm segment: {result}");
         assert!(
-            result.contains(":/usr/local/bin:"),
-            "exe parent must precede the inherited PATH: {result}"
+            result.starts_with("/usr/local/bin:/home/user/.local/bin:"),
+            "{result}"
         );
+        assert!(!result.contains(".nvm"), "no nvm segment: {result}");
         assert!(
             result.ends_with(":/sentinel/inherited"),
             "inherited PATH must be appended last when no shell_path: {result}"

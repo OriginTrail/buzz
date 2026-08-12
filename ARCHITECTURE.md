@@ -620,6 +620,7 @@ pub enum AuthState { Pending { challenge: String }, Authenticated(AuthContext), 
 | POST | `/events` | Submit a signed Nostr event over HTTP (same ingest path as WebSocket `EVENT`) |
 | POST | `/query` | Query Nostr events over HTTP with NIP-01 filters |
 | POST | `/count` | Count Nostr events over HTTP with NIP-45 filters |
+| POST | `/api/dkg/query` | Feature-configured, NIP-98-authenticated front for constrained DKG graph reads |
 | POST | `/hooks/{id}` | Workflow webhook trigger (secret-authenticated) |
 | PUT | `/media/upload` | Upload media blob (Blossom, 50 MB limit) |
 | GET/HEAD | `/media/{sha256_ext}` | Retrieve/probe media blob |
@@ -627,6 +628,19 @@ pub enum AuthState { Pending { challenge: String }, Authenticated(AuthContext), 
 | POST | `/git/{owner}/{repo}/git-upload-pack` | Git smart HTTP fetch |
 | POST | `/git/{owner}/{repo}/git-receive-pack` | Git smart HTTP push |
 | POST | `/internal/git/policy` | Internal git hook policy check |
+
+The DKG query front is an intentional HTTP exception to Buzz's Nostr-first API.
+Graph, triple, trail, and evidence results can be large request/response reads;
+persisting them as relay events would add irrelevant history and fan-out. The
+route is absent unless both `BUZZ_DKG_QUERY_URL` and `BUZZ_DKG_QUERY_TOKEN` are
+configured. Before forwarding it binds the tenant from `Host`, verifies NIP-98
+against the exact URL and body payload, applies shared HTTP admission and replay
+protection, enforces relay membership, and applies the relay's canonical
+tenant-scoped accessible-channel check. Only allowlisted operation-specific
+arguments plus the authenticated requester pubkey reach the internal
+integration. Request bodies, response bodies, redirects, and total request time
+are bounded; callers cannot provide a context-graph id, SPARQL, DKG endpoint, or
+DKG credential.
 
 **Constants:**
 

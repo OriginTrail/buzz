@@ -27,6 +27,8 @@ import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeig
 import { UserProfilePanel } from "@/features/profile/ui/UserProfilePanel";
 import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThreadPanel";
 import { ChannelManagementAuxiliaryPanel } from "@/features/channels/ui/ChannelManagementAuxiliaryPanel";
+import { DkgMemoryDock } from "@/features/dkg-memory/ui/DkgMemoryDock";
+import { useDkgMemoryMessageAdornments } from "@/features/dkg-memory/ui/messageAdornments";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
 import { ThreadViewModeToggle } from "@/features/channels/ui/ThreadViewModeToggle";
 import { FocusThreadDrawer } from "@/features/channels/ui/FocusThreadDrawer";
@@ -397,6 +399,12 @@ export const ChannelPane = React.memo(function ChannelPane({
     profiles,
     threadSummaries,
   });
+  const messageBodyAdornments = useDkgMemoryMessageAdornments(
+    activeChannelId,
+    messages,
+    threadHeadMessage,
+    threadAllMessages,
+  );
   useRenderScopedReactionHydration({
     activeChannel,
     mainTimelineEntries,
@@ -600,6 +608,7 @@ export const ChannelPane = React.memo(function ChannelPane({
             mainEntries={mainTimelineEntries}
             threadSummaries={threadSummaries}
             messages={visibleMessages}
+            messageBodyAdornments={messageBodyAdornments}
             firstUnreadMessageId={firstUnreadMessageId}
             unreadCount={unreadCount}
             onDelete={onDelete}
@@ -752,6 +761,7 @@ export const ChannelPane = React.memo(function ChannelPane({
        * animate. It can hold the real thread through the exit rather than a
        * frozen snapshot because the panel is fully prop-driven.
        */}
+      <DkgMemoryDock channelId={activeChannel?.id ?? null} />
       <AnimatePresence onExitComplete={markExitComplete}>
         {channelManagementOpen && activeChannel ? (
           <ChannelManagementAuxiliaryPanel
@@ -815,6 +825,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                 scrollTargetId={layoutScrollTargetId ?? threadScrollTargetId}
                 threadHead={threadHeadMessage}
                 videoReviewPresentation={threadVideoReviewPresentation}
+                messageBodyAdornments={messageBodyAdornments}
                 widthPx={threadPanelWidthPx}
                 threadReplies={threadMessages}
                 threadRepliesPending={threadMessagesPending}

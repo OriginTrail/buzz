@@ -66,6 +66,7 @@ type MessageThreadPanelProps = ThreadPanelLayoutProps & {
   isHuddleTranscript?: boolean;
   editTarget?: MessageComposerEditTarget | null;
   isSending: boolean;
+  messageBodyAdornments?: ReadonlyMap<string, React.ReactNode>;
   onCancelEdit?: () => void;
   onCancelReply: () => void;
   onClose: () => void;
@@ -205,6 +206,7 @@ export function MessageThreadPanel({
   isSinglePanelView = false,
   isFollowingThread,
   isMessageUnreadById,
+  messageBodyAdornments,
   onCancelEdit,
   onCancelReply,
   onClose,
@@ -372,7 +374,6 @@ export function MessageThreadPanel({
     !isHuddleTranscript &&
     isFocusMode &&
     (threadRepliesPending || repliesRenderState === "list");
-
   const threadMessages = React.useMemo(
     () => deferredThreadReplies.map((entry) => entry.message),
     [deferredThreadReplies],
@@ -584,6 +585,7 @@ export function MessageThreadPanel({
             <div className="rounded-2xl">
               <MessageRow
                 actionBarPlacement="inside"
+                bodyAdornment={messageBodyAdornments?.get(threadHead.id)}
                 channelId={channelId}
                 currentPubkey={currentPubkey}
                 huddleMemberPubkeys={huddleMemberPubkeys}
@@ -717,6 +719,9 @@ export function MessageThreadPanel({
                     >
                       {showUnreadDivider ? <UnreadDivider /> : null}
                       <MessageRow
+                        bodyAdornment={messageBodyAdornments?.get(
+                          entry.message.id,
+                        )}
                         channelId={channelId}
                         currentPubkey={currentPubkey}
                         collapseDepthGuideActions={collapseDepthGuideActions}

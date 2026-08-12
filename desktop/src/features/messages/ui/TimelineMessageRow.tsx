@@ -60,6 +60,7 @@ export function SystemRow({
 }
 
 type MessageRowItemProps = {
+  bodyAdornment?: React.ReactNode;
   channelId?: string | null;
   currentPubkey?: string;
   entry: MainTimelineEntry;
@@ -92,6 +93,7 @@ type MessageRowItemProps = {
 };
 
 export function MessageRowItem({
+  bodyAdornment,
   channelId,
   currentPubkey,
   entry,
@@ -142,6 +144,7 @@ export function MessageRowItem({
         )}
       >
         <MessageRow
+          bodyAdornment={bodyAdornment}
           channelId={channelId}
           highlighted={false}
           hoverBackground={false}
@@ -201,6 +204,7 @@ export function MessageRowItem({
       )}
     >
       <MessageRow
+        bodyAdornment={bodyAdornment}
         channelId={channelId}
         highlighted={message.id === highlightedMessageId || isSearchActive}
         huddleMemberPubkeys={huddleMemberPubkeys}

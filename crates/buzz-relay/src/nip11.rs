@@ -40,6 +40,9 @@ pub struct RelayInfo {
     /// Draft/extension protocol identifiers supported by this relay.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supported_extensions: Option<Vec<String>>,
+    /// Versioned DKG memory profiles and fixed query operations exposed by this relay.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dkg_memory: Option<serde_json::Value>,
     /// NIP-PL executor descriptor. Present only when push delivery is configured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub push: Option<serde_json::Value>,
@@ -163,6 +166,7 @@ impl RelayInfo {
             contact: None,
             supported_nips,
             supported_extensions: Some(vec!["nip-er".to_string()]),
+            dkg_memory: None,
             push: None,
             software: "https://github.com/block/buzz".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -231,6 +235,31 @@ fn push_descriptor(
     }))
 }
 
+fn dkg_memory_descriptor() -> serde_json::Value {
+    serde_json::json!({
+        "schema_versions": [1, 2],
+        "profiles": ["dkg-memory@1", "dkg-software@1"],
+        "adapter_profiles": ["buzz-nostr@1"],
+        "proposal_kind": 40009,
+        "query_operations": [
+            "channel_memory",
+            "contributor_trail",
+            "software_contributors",
+            "decision_trace",
+            "subgraph_graph",
+            "subgraph_triples",
+            "evidence",
+            "semantic_query"
+        ],
+        "semantic_query": {
+            "scopes": ["current_channel"],
+            "forms": ["select", "ask", "construct"],
+            "max_limit": 100,
+            "cost_budget": 40
+        }
+    })
+}
+
 /// Builds the served NIP-11 document for a request arriving on `raw_host`.
 ///
 /// Centralised so the content-negotiated root handler and the dedicated
@@ -266,6 +295,17 @@ pub(crate) async fn nip11_document(state: &crate::state::AppState, raw_host: &st
             .get_or_insert_default()
             .push("nip-pl".to_string());
         info.push = Some(push);
+    }
+    if let Some(config) = state.config.dkg_query.as_ref() {
+        info.dkg_memory = Some(dkg_memory_descriptor());
+        if config.agent_memory_enabled {
+            info.supported_extensions
+                .get_or_insert_default()
+                .push("buzz-dkg-memory-v1".to_string());
+            info.supported_extensions
+                .get_or_insert_default()
+                .push("buzz-dkg-memory-v2".to_string());
+        }
     }
     info
 }
@@ -393,6 +433,25 @@ mod tests {
     fn build_advertises_buzz_repository_url() {
         let info = RelayInfo::build(None, None, false, DEFAULT_MAX_FRAME_BYTES, None);
         assert_eq!(info.software, "https://github.com/block/buzz");
+    }
+
+    #[test]
+    fn dkg_memory_descriptor_advertises_v2_profiles_and_competency_queries() {
+        let descriptor = dkg_memory_descriptor();
+        assert!(descriptor["schema_versions"]
+            .as_array()
+            .is_some_and(|versions| versions.contains(&serde_json::json!(2))));
+        assert!(descriptor["profiles"]
+            .as_array()
+            .is_some_and(|profiles| profiles.contains(&serde_json::json!("dkg-software@1"))));
+        assert!(descriptor["query_operations"]
+            .as_array()
+            .is_some_and(|operations| operations.contains(&serde_json::json!("decision_trace"))));
+        assert!(descriptor["query_operations"]
+            .as_array()
+            .is_some_and(|operations| operations.contains(&serde_json::json!("semantic_query"))));
+        assert_eq!(descriptor["semantic_query"]["scopes"][0], "current_channel");
+        assert_eq!(descriptor["semantic_query"]["max_limit"], 100);
     }
 
     #[test]
