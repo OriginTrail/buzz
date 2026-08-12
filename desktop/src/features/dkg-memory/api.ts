@@ -539,7 +539,12 @@ export async function fetchDecisionTrace(
 /** Read the channel's evidence-backed trust network without computing a score. */
 export async function fetchTrustNetwork(
   channelId: string,
-  page: { limit?: number; cursor?: string; since?: number; until?: number } = {},
+  page: {
+    limit?: number;
+    cursor?: string;
+    since?: number;
+    until?: number;
+  } = {},
 ): Promise<TrustNetwork> {
   return queryDkgProvider<TrustNetwork, "trust_network">({
     channelId,
