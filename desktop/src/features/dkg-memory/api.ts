@@ -18,6 +18,7 @@ export {
   resetDkgMemoryProvider,
   type ExplorerSource,
 } from "./provider";
+export { publishTrustVouch, revokeTrustVouch } from "./trustActions";
 
 export type MemoryGate = "ok" | "node-missing" | "auth" | "not-subscribed";
 
@@ -120,6 +121,18 @@ export interface TrustVouch {
   status: string;
   at: number | null;
   sourceEvent: string | null;
+  evidence: string[];
+  lifecycleEvent: string | null;
+  replacementVouch: string | null;
+  layer: "SWM" | "VM";
+}
+
+export interface WorkEvidence {
+  uri: string;
+  kind: string;
+  name: string | null;
+  sourceEvent: string | null;
+  at: number | null;
   layer: "SWM" | "VM";
 }
 
@@ -150,12 +163,14 @@ export interface ReputationSummary {
     directVouch: boolean;
     twoHopVouchers: number;
     independentVouchers: number;
+    independentLineages: number;
     evidenceRecords: number;
     verifiableEvidence: boolean;
   };
   reasons: string[];
   evidence: TrustVouch[];
-  methodology: "dkg-reputation-v1";
+  workEvidence: WorkEvidence[];
+  methodology: "dkg-reputation-v2";
 }
 
 export interface SemanticQueryLayer {
@@ -502,106 +517,6 @@ export async function fetchReputationSummary(
     arguments: { pubkey },
     localPath: null,
   });
-}
-
-const HEX_PUBKEY = /^[0-9a-f]{64}$/iu;
-
-/**
- * Publish one explicit NIP-32 vouch, then project that exact signed event into
- * channel DKG memory. The LLM never decides who is trusted; the human signs the
- * conclusion and the graph retains the original event as provenance.
- */
-export async function publishTrustVouch({
-  channelId,
-  subjectPubkey,
-  subjectName,
-  note,
-}: {
-  channelId: string;
-  subjectPubkey: string;
-  subjectName: string;
-  note: string;
-}): Promise<{ eventId: string; state?: string }> {
-  const subject = subjectPubkey.toLowerCase();
-  const displayName = subjectName.trim().slice(0, 500) || subject.slice(0, 12);
-  const normalizedNote = note.trim();
-  if (!HEX_PUBKEY.test(subject)) throw new Error("Invalid vouch subject.");
-  if (!normalizedNote || normalizedNote.length > 1_000) {
-    throw new Error("A vouch explanation must contain 1–1,000 characters.");
-  }
-
-  const vouch = await signRelayEvent({
-    kind: 1985,
-    content: normalizedNote,
-    tags: [
-      ["h", channelId],
-      ["L", "buzz.wot"],
-      ["l", "vouch", "buzz.wot"],
-      ["p", subject],
-    ],
-  });
-  if (vouch.pubkey.toLowerCase() === subject) {
-    throw new Error("You cannot vouch for your own identity.");
-  }
-  await relayClient.publishEvent(
-    vouch,
-    "The signed vouch timed out before the relay confirmed it.",
-    "The relay could not publish the signed vouch.",
-  );
-
-  const issuer = vouch.pubkey.toLowerCase();
-  const proposal = await signRelayEvent({
-    kind: 40009,
-    content: JSON.stringify({
-      schemaVersion: 2,
-      profiles: ["dkg-memory@1", "dkg-trust@1"],
-      summary: `Vouch for ${displayName}`,
-      entities: [
-        {
-          id: "vouch",
-          type: "trust:Vouch",
-          name: `Vouch for ${displayName}`,
-          description: normalizedNote,
-          attributes: [
-            { predicate: "trust:status", value: "active" },
-            { predicate: "trust:scope", value: "channel" },
-          ],
-        },
-        {
-          id: "issuer",
-          type: "schema:Person",
-          name: "Vouch issuer",
-          locator: { kind: "uri", uri: `urn:nostr:pubkey:${issuer}` },
-        },
-        {
-          id: "subject",
-          type: "schema:Person",
-          name: displayName,
-          locator: { kind: "uri", uri: `urn:nostr:pubkey:${subject}` },
-        },
-      ],
-      relations: [
-        { subject: "vouch", predicate: "trust:issuer", object: "issuer" },
-        { subject: "vouch", predicate: "trust:subject", object: "subject" },
-      ],
-      promptVersion: "human-vouch-v1",
-    }),
-    tags: [
-      ["h", channelId],
-      ["t", "dkg-memory-proposal"],
-      ["e", vouch.id, "", "source"],
-    ],
-  });
-  const body = JSON.stringify(proposal);
-  const deadline = Date.now() + 120_000;
-  do {
-    const result = await postMemoryProposal(body);
-    if (memoryProposalProgress(result.state) !== "processing") {
-      return { eventId: vouch.id, state: result.state };
-    }
-    await new Promise((resolve) => window.setTimeout(resolve, 2_000));
-  } while (Date.now() < deadline);
-  return { eventId: vouch.id, state: "processing" };
 }
 
 // ── Graph view (per the graph-view deliberation) ────────────────────────────
