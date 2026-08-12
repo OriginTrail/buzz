@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import test, { afterEach } from "node:test";
 
 import {
+  deriveContextGraphId,
   fetchChannelMemory,
   fetchDecisionTrace,
   fetchSemanticQuery,
@@ -51,6 +52,19 @@ afterEach(() => {
   globalThis.fetch = originalFetch;
   globalThis.window = originalWindow;
   globalThis.localStorage = originalLocalStorage;
+});
+
+test("channel graph binding requires the gateway unless explicitly overridden", async () => {
+  globalThis.localStorage = {
+    getItem: () => null,
+  };
+  assert.equal(await deriveContextGraphId(CHANNEL_ID), null);
+
+  globalThis.localStorage = {
+    getItem: (key) =>
+      key === `dkg-memory-cg:${CHANNEL_ID}` ? "explicit-local-cg" : null,
+  };
+  assert.equal(await deriveContextGraphId(CHANNEL_ID), "explicit-local-cg");
 });
 
 test("community gateway uses active relay URL and a fresh payload-bound NIP-98 event", async () => {

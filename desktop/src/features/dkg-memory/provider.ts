@@ -290,7 +290,7 @@ async function communityGatewayQuery<
 /**
  * Resolve a DKG read local-first, then through the authenticated active relay.
  * The gateway body is deliberately reconstructed from the operation contract;
- * `localPath` (and its receipt-derived CG) can never become authorization input.
+ * `localPath` and its locally resolved CG can never become authorization input.
  */
 export async function queryDkgProvider<
   Result,

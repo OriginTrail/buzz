@@ -494,6 +494,12 @@ fn parse_dkg_query_config(
                 .to_string(),
         ));
     }
+    if agent_memory_enabled && !url.path().ends_with("/v1/query") {
+        return Err(ConfigError::InvalidValue(
+            "BUZZ_DKG_MEMORY_ENABLED requires BUZZ_DKG_QUERY_URL to end in /v1/query so the internal /v1/memory endpoint can be derived"
+                .to_string(),
+        ));
+    }
 
     let timeout_ms = match raw_timeout_ms {
         Some(raw) => raw
@@ -1814,6 +1820,21 @@ mod tests {
         assert_eq!(configured.timeout, Duration::from_millis(15_000));
         assert!(configured.agent_memory_enabled);
         assert!(!format!("{configured:?}").contains("0123456789abcdef"));
+
+        assert!(parse_dkg_query_config(
+            Some("http://127.0.0.1:9296/query".to_string()),
+            Some("0123456789abcdef0123456789abcdef".to_string()),
+            None,
+            true,
+        )
+        .is_err());
+        assert!(parse_dkg_query_config(
+            Some("http://127.0.0.1:9296/query".to_string()),
+            Some("0123456789abcdef0123456789abcdef".to_string()),
+            None,
+            false,
+        )
+        .is_ok());
 
         assert!(parse_dkg_query_config(
             Some("http://127.0.0.1:9296/v1/query".to_string()),

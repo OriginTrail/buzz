@@ -20,9 +20,13 @@ import { resolveMemoryPanelState } from "./memoryPanelState";
 export function MemoryPanel({ channelId }: { channelId: string }) {
   const queryClient = useQueryClient();
   const cgQuery = useChannelContextGraph(channelId);
-  const receiptCg = cgQuery.data ?? null;
-  const memory = useChannelMemory(channelId, receiptCg, !cgQuery.isLoading);
-  const cg = memory.data?.cg ?? receiptCg;
+  const localCgOverride = cgQuery.data ?? null;
+  const memory = useChannelMemory(
+    channelId,
+    localCgOverride,
+    !cgQuery.isLoading,
+  );
+  const cg = memory.data?.cg ?? localCgOverride;
   const [enabling, setEnabling] = useState(false);
   const [enableError, setEnableError] = useState<string | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);

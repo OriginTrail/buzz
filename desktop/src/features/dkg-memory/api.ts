@@ -339,16 +339,19 @@ async function postMemoryProposal(
 }
 
 /**
- * Derive the channel's Context Graph id from the latest @dkg receipt in the
- * channel. Receipts are ordinary kind-9 replies whose machine-readable lines
- * include `context-graph: <id>` — so the binding is discoverable by any
- * member with zero extra configuration.
+ * Resolve an explicit local Context Graph override.
+ *
+ * Ordinary channel messages and human-readable @dkg receipts are discovery
+ * evidence, not an authoritative channel-to-graph binding: any channel member
+ * can publish them. The authenticated community gateway supplies the canonical
+ * binding on the first read; its returned CG can then be used for local edge
+ * node reads by nested views.
  */
 export async function deriveContextGraphId(
   channelId: string,
 ): Promise<string | null> {
-  // Explicit override for channels without receipts yet (also the seam the
-  // e2e demo uses): a global or per-channel localStorage key wins.
+  // Explicit override for local development and the e2e demo. Production
+  // installs normally leave this unset and use the gateway-provided binding.
   try {
     const override =
       localStorage.getItem(`dkg-memory-cg:${channelId}`) ??
@@ -356,16 +359,6 @@ export async function deriveContextGraphId(
     if (override) return override;
   } catch {
     /* storage unavailable */
-  }
-  const events = await relayClient.fetchEvents({
-    kinds: [9],
-    "#h": [channelId],
-    limit: 500,
-  });
-  const sorted = [...events].sort((a, b) => b.created_at - a.created_at);
-  for (const ev of sorted) {
-    const m = /^context-graph: (\S+)$/m.exec(ev.content);
-    if (m) return m[1];
   }
   return null;
 }

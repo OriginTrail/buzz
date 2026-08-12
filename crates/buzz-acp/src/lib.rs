@@ -199,7 +199,11 @@ fn nip11_dkg_semantic_query(value: &serde_json::Value) -> bool {
     operation && current_channel && has_required_forms
 }
 
-async fn relay_dkg_capabilities(relay_url: &str) -> DkgCapabilities {
+const DKG_CAPABILITY_ATTEMPTS: usize = 3;
+const DKG_CAPABILITY_RETRY_DELAYS: [Duration; DKG_CAPABILITY_ATTEMPTS - 1] =
+    [Duration::from_millis(250), Duration::from_secs(1)];
+
+async fn fetch_relay_dkg_capabilities(relay_url: &str) -> Result<DkgCapabilities, String> {
     let url = relay::relay_ws_to_http(relay_url);
     let result = reqwest::Client::new()
         .get(url)
@@ -208,27 +212,37 @@ async fn relay_dkg_capabilities(relay_url: &str) -> DkgCapabilities {
         .send()
         .await;
     match result {
-        Ok(response) if response.status().is_success() => {
-            match response.json::<serde_json::Value>().await {
-                Ok(value) => DkgCapabilities {
-                    memory_schema: nip11_dkg_memory_schema(&value),
-                    semantic_query: nip11_dkg_semantic_query(&value),
-                },
-                Err(error) => {
-                    tracing::warn!(%error, "could not parse relay capabilities; DKG memory disabled");
-                    DkgCapabilities::default()
-                }
+        Ok(response) if response.status().is_success() => response
+            .json::<serde_json::Value>()
+            .await
+            .map(|value| DkgCapabilities {
+                memory_schema: nip11_dkg_memory_schema(&value),
+                semantic_query: nip11_dkg_semantic_query(&value),
+            })
+            .map_err(|error| format!("could not parse relay capabilities: {error}")),
+        Ok(response) => Err(format!(
+            "could not read relay capabilities: HTTP {}",
+            response.status()
+        )),
+        Err(error) => Err(format!("could not read relay capabilities: {error}")),
+    }
+}
+
+async fn relay_dkg_capabilities(relay_url: &str) -> DkgCapabilities {
+    for attempt in 0..DKG_CAPABILITY_ATTEMPTS {
+        match fetch_relay_dkg_capabilities(relay_url).await {
+            Ok(capabilities) => return capabilities,
+            Err(error) if attempt + 1 < DKG_CAPABILITY_ATTEMPTS => {
+                let delay = DKG_CAPABILITY_RETRY_DELAYS[attempt];
+                tracing::warn!(attempt = attempt + 1, %error, ?delay, "relay capability discovery failed; retrying");
+                tokio::time::sleep(delay).await;
+            }
+            Err(error) => {
+                tracing::warn!(attempt = attempt + 1, %error, "relay capability discovery failed; DKG memory disabled for this agent session");
             }
         }
-        Ok(response) => {
-            tracing::warn!(status = %response.status(), "could not read relay capabilities; DKG memory disabled");
-            DkgCapabilities::default()
-        }
-        Err(error) => {
-            tracing::warn!(%error, "could not read relay capabilities; DKG memory disabled");
-            DkgCapabilities::default()
-        }
     }
+    DkgCapabilities::default()
 }
 
 fn append_dkg_memory_instructions(
