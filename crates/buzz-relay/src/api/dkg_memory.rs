@@ -353,6 +353,14 @@ fn event_tag_values<'a>(event: &'a nostr::Event, name: &str) -> Vec<&'a str> {
         .collect()
 }
 
+fn proposal_uses_profile(event: &nostr::Event, profile: &str) -> bool {
+    serde_json::from_str::<Value>(&event.content)
+        .ok()
+        .and_then(|proposal| proposal.get("profiles").cloned())
+        .and_then(|profiles| profiles.as_array().cloned())
+        .is_some_and(|profiles| profiles.iter().any(|value| value.as_str() == Some(profile)))
+}
+
 fn parse_proposal(body: &[u8], requester: &nostr::PublicKey) -> Result<ParsedProposal, ApiFailure> {
     let event: nostr::Event = serde_json::from_slice(body)
         .map_err(|error| invalid(&format!("invalid signed proposal event: {error}")))?;
@@ -459,6 +467,9 @@ pub async fn propose(
     .await?;
 
     let (proposal, channel_id, source_ids) = parse_proposal(&body, &requester)?;
+    if !config.trust_enabled && proposal_uses_profile(&proposal, "dkg-trust@1") {
+        return Err(not_found("not found"));
+    }
     dkg_query::enforce_authoritative_channel_read(&state, &tenant, channel_id, &requester_bytes)
         .await?;
 
@@ -581,6 +592,28 @@ mod tests {
         });
         let (keys, event, _) = proposal(invalid, &[source]);
         assert!(parse_proposal(&serde_json::to_vec(&event).unwrap(), &keys.public_key()).is_err());
+    }
+
+    #[test]
+    fn detects_the_optional_trust_profile_from_signed_proposal_content() {
+        let source = nostr::EventId::all_zeros();
+        let content = serde_json::json!({
+            "schemaVersion": 2,
+            "profiles": ["dkg-memory@1", "dkg-trust@1"],
+            "summary": "Vouch",
+            "entities": [
+                {"id":"vouch", "type":"trust:Vouch", "name":"Vouch", "attributes":[{"predicate":"trust:status","value":"active"},{"predicate":"trust:scope","value":"channel"}]},
+                {"id":"issuer", "type":"schema:Person", "name":"Issuer", "locator":{"kind":"uri","uri":format!("urn:nostr:pubkey:{}", "11".repeat(32))}},
+                {"id":"subject", "type":"schema:Person", "name":"Subject", "locator":{"kind":"uri","uri":format!("urn:nostr:pubkey:{}", "22".repeat(32))}}
+            ],
+            "relations": [
+                {"subject":"vouch", "predicate":"trust:issuer", "object":"issuer"},
+                {"subject":"vouch", "predicate":"trust:subject", "object":"subject"}
+            ]
+        });
+        let (_, event, _) = proposal(content, &[source]);
+        assert!(proposal_uses_profile(&event, "dkg-trust@1"));
+        assert!(!proposal_uses_profile(&event, "dkg-software@1"));
     }
 
     #[test]

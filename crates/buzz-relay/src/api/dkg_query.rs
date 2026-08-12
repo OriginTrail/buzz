@@ -412,6 +412,13 @@ pub async fn query(
     .await?;
 
     let forward = parse_and_sanitize_request(&body, &requester)?;
+    if matches!(
+        forward.operation,
+        Operation::TrustNetwork | Operation::ReputationSummary
+    ) && !config.trust_enabled
+    {
+        return Err(not_found("not found"));
+    }
     enforce_authoritative_channel_read(&state, &tenant, forward.channel_id, &requester_bytes)
         .await?;
 

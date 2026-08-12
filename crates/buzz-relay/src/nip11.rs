@@ -236,24 +236,28 @@ fn push_descriptor(
     }))
 }
 
-fn dkg_memory_descriptor() -> serde_json::Value {
+fn dkg_memory_descriptor(trust_enabled: bool) -> serde_json::Value {
+    let mut profiles = vec!["dkg-memory@1", "dkg-software@1"];
+    let mut query_operations = vec![
+        "channel_memory",
+        "contributor_trail",
+        "software_contributors",
+        "decision_trace",
+        "subgraph_graph",
+        "subgraph_triples",
+        "evidence",
+        "semantic_query",
+    ];
+    if trust_enabled {
+        profiles.push("dkg-trust@1");
+        query_operations.splice(4..4, ["trust_network", "reputation_summary"]);
+    }
     serde_json::json!({
         "schema_versions": [1, 2],
-        "profiles": ["dkg-memory@1", "dkg-software@1", "dkg-trust@1"],
+        "profiles": profiles,
         "adapter_profiles": ["buzz-nostr@1"],
         "proposal_kind": 40009,
-        "query_operations": [
-            "channel_memory",
-            "contributor_trail",
-            "software_contributors",
-            "decision_trace",
-            "trust_network",
-            "reputation_summary",
-            "subgraph_graph",
-            "subgraph_triples",
-            "evidence",
-            "semantic_query"
-        ],
+        "query_operations": query_operations,
         "semantic_query": {
             "scopes": ["current_channel"],
             "forms": ["select", "ask", "construct"],
@@ -300,7 +304,7 @@ pub(crate) async fn nip11_document(state: &crate::state::AppState, raw_host: &st
         info.push = Some(push);
     }
     if let Some(config) = state.config.dkg_query.as_ref() {
-        info.dkg_memory = Some(dkg_memory_descriptor());
+        info.dkg_memory = Some(dkg_memory_descriptor(config.trust_enabled));
         if config.agent_memory_enabled {
             info.supported_extensions
                 .get_or_insert_default()
@@ -452,7 +456,7 @@ mod tests {
 
     #[test]
     fn dkg_memory_descriptor_advertises_v2_profiles_and_competency_queries() {
-        let descriptor = dkg_memory_descriptor();
+        let descriptor = dkg_memory_descriptor(true);
         assert!(descriptor["schema_versions"]
             .as_array()
             .is_some_and(|versions| versions.contains(&serde_json::json!(2))));
@@ -470,6 +474,17 @@ mod tests {
         ));
         assert_eq!(descriptor["semantic_query"]["scopes"][0], "current_channel");
         assert_eq!(descriptor["semantic_query"]["max_limit"], 100);
+
+        let descriptor = dkg_memory_descriptor(false);
+        assert!(descriptor["profiles"]
+            .as_array()
+            .is_some_and(|profiles| !profiles.contains(&serde_json::json!("dkg-trust@1"))));
+        assert!(descriptor["query_operations"]
+            .as_array()
+            .is_some_and(
+                |operations| !operations.contains(&serde_json::json!("trust_network"))
+                    && !operations.contains(&serde_json::json!("reputation_summary"))
+            ));
     }
 
     #[test]
