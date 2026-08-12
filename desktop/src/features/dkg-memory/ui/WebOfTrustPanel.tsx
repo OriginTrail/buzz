@@ -8,7 +8,7 @@ import {
   ShieldX,
   UserRoundCheck,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useChannelMembersQuery } from "@/features/channels/hooks";
 import { useIdentityQuery } from "@/shared/api/hooks";
 import { Badge } from "@/shared/ui/badge";
@@ -19,6 +19,7 @@ import { Textarea } from "@/shared/ui/textarea";
 import { truncatePubkey } from "@/shared/lib/pubkey";
 import {
   publishTrustVouch,
+  retryPendingTrustProjections,
   revokeTrustVouch,
   type ReputationSummary,
   type WorkEvidence,
@@ -115,6 +116,27 @@ export function WebOfTrustPanel({
   );
   const workEvidence = reputation.data?.workEvidence ?? [];
 
+  useEffect(() => {
+    let active = true;
+    void retryPendingTrustProjections(channelId).then((result) => {
+      if (!active || result.completed === 0) return;
+      setNotice(
+        result.remaining > 0
+          ? `${result.completed} pending trust update${result.completed === 1 ? "" : "s"} recovered; ${result.remaining} still waiting.`
+          : `${result.completed} pending trust update${result.completed === 1 ? "" : "s"} recovered.`,
+      );
+      void queryClient.invalidateQueries({
+        queryKey: ["dkg-memory", "trust-network", channelId],
+      });
+      void queryClient.invalidateQueries({
+        queryKey: ["dkg-memory", "reputation-summary", channelId],
+      });
+    });
+    return () => {
+      active = false;
+    };
+  }, [channelId, queryClient]);
+
   const publish = useMutation({
     mutationFn: () =>
       publishTrustVouch({
@@ -133,9 +155,11 @@ export function WebOfTrustPanel({
       setNote("");
       setSelectedEvidence([]);
       setNotice(
-        result.state === "processing"
-          ? "Signed vouch accepted. The Context Graph is still updating."
-          : "Signed vouch stored with its source evidence.",
+        result.state === "projection_pending"
+          ? "Your signed vouch is safely queued. Relay delivery and its graph update will retry when this panel opens."
+          : result.state === "processing"
+            ? "Signed vouch accepted. The Context Graph is still updating."
+            : "Signed vouch stored with its source evidence.",
       );
       await queryClient.invalidateQueries({
         queryKey: ["dkg-memory", "trust-network", channelId],
@@ -153,9 +177,11 @@ export function WebOfTrustPanel({
         subjectPubkey: activePubkey ?? "",
         targetEventId: ownActive ? (sourceId(ownActive.sourceEvent) ?? "") : "",
       }),
-    onSuccess: async () => {
+    onSuccess: async (result) => {
       setNotice(
-        "Your signed vouch was revoked. Its history remains inspectable.",
+        result.state === "projection_pending"
+          ? "Your signed revocation is safely queued for relay and graph retry."
+          : "Your signed vouch was revoked. Its history remains inspectable.",
       );
       await queryClient.invalidateQueries({
         queryKey: ["dkg-memory", "trust-network", channelId],

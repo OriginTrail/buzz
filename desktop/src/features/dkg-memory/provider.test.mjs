@@ -12,6 +12,7 @@ import {
   fetchSoftwareContributors,
   fetchTrustNetwork,
   publishTrustVouch,
+  retryPendingTrustProjections,
   revokeTrustVouch,
 } from "./api.ts";
 import {
@@ -546,7 +547,7 @@ test("a vouch signs and publishes human evidence before proposing its DKG projec
     channelId: CHANNEL_ID,
     subjectPubkey: subject,
     subjectName: "Alice",
-    note: "  Caught a rollback edge case while reviewing two releases.  ",
+    note: "  Caught a rollback edge case\nwhile reviewing two releases.  ",
     evidence: [
       {
         uri: "urn:dkg:github:commit:github.com/acme/api/abc1234",
@@ -671,4 +672,118 @@ test("revoke publishes an append-only signed lifecycle event and exact DKG proje
     proposal.entities[0].locator.uri,
     `urn:buzz-dkg:vouch-lifecycle:${"1".repeat(64)}`,
   );
+});
+
+test("a published vouch queues its exact failed graph projection and retries without duplication", async () => {
+  const issuer = "a".repeat(64);
+  const subject = "b".repeat(64);
+  const signed = [];
+  installTauri("https://relay.example/", (args) => {
+    const event = {
+      id: String(signed.length + 1).repeat(64),
+      sig: "c".repeat(128),
+      pubkey: issuer,
+      kind: args.kind,
+      created_at: 1_786_363_200 + signed.length,
+      tags: args.tags,
+      content: args.content,
+    };
+    signed.push(event);
+    return event;
+  });
+  const storage = new Map();
+  globalThis.localStorage = {
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  const published = [];
+  mock.method(relayClient, "publishEvent", async (event) => {
+    published.push(event);
+  });
+  globalThis.fetch = async () => {
+    throw new TypeError("gateway temporarily unavailable");
+  };
+
+  const result = await publishTrustVouch({
+    channelId: CHANNEL_ID,
+    subjectPubkey: subject,
+    subjectName: "Alice",
+    note: "Reviewed the release.",
+  });
+  assert.equal(result.state, "projection_pending");
+  assert.equal(published.length, 1);
+  const queued = JSON.parse(
+    storage.get("buzz-dkg-trust-projections.v1") ?? "[]",
+  );
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0].sourceEventId, published[0].id);
+  const proposalBody = queued[0].proposalBody;
+
+  globalThis.fetch = async (_url, init) => {
+    assert.equal(String(init.body), proposalBody);
+    return new Response(JSON.stringify({ state: "stored" }));
+  };
+  assert.deepEqual(await retryPendingTrustProjections(CHANNEL_ID), {
+    completed: 1,
+    remaining: 0,
+  });
+  assert.equal(published.length, 1, "retry must not publish another vouch");
+  assert.equal(storage.has("buzz-dkg-trust-projections.v1"), false);
+});
+
+test("a failed relay delivery queues the exact signed trust event before graph projection", async () => {
+  const issuer = "a".repeat(64);
+  const subject = "b".repeat(64);
+  const signed = [];
+  installTauri("https://relay.example/", (args) => {
+    const event = {
+      id: String(signed.length + 1).repeat(64),
+      sig: "c".repeat(128),
+      pubkey: issuer,
+      kind: args.kind,
+      created_at: 1_786_363_200 + signed.length,
+      tags: args.tags,
+      content: args.content,
+    };
+    signed.push(event);
+    return event;
+  });
+  const storage = new Map();
+  globalThis.localStorage = {
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  let relayAvailable = false;
+  const published = [];
+  mock.method(relayClient, "publishEvent", async (event) => {
+    if (!relayAvailable) throw new Error("relay temporarily unavailable");
+    published.push(event);
+  });
+  globalThis.fetch = async () => {
+    assert.fail("the graph proposal must wait for relay delivery");
+  };
+
+  const result = await publishTrustVouch({
+    channelId: CHANNEL_ID,
+    subjectPubkey: subject,
+    subjectName: "Alice",
+    note: "Reviewed the release.",
+  });
+  assert.equal(result.state, "projection_pending");
+  const [queued] = JSON.parse(
+    storage.get("buzz-dkg-trust-projections.v1") ?? "[]",
+  );
+  assert.equal(queued.sourcePublished, false);
+  assert.deepEqual(queued.sourceEvent, signed[0]);
+
+  relayAvailable = true;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify({ state: "stored" }));
+  assert.deepEqual(await retryPendingTrustProjections(CHANNEL_ID), {
+    completed: 1,
+    remaining: 0,
+  });
+  assert.deepEqual(published, [signed[0]]);
 });

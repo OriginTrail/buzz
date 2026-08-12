@@ -18,7 +18,11 @@ export {
   resetDkgMemoryProvider,
   type ExplorerSource,
 } from "./provider";
-export { publishTrustVouch, revokeTrustVouch } from "./trustActions";
+export {
+  publishTrustVouch,
+  retryPendingTrustProjections,
+  revokeTrustVouch,
+} from "./trustActions";
 
 export type MemoryGate = "ok" | "node-missing" | "auth" | "not-subscribed";
 

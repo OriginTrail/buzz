@@ -11,6 +11,15 @@ import {
 const HEX_PUBKEY = /^[0-9a-f]{64}$/iu;
 const HEX_EVENT = /^[0-9a-f]{64}$/iu;
 const SAFE_EVIDENCE_URI = /^(?:https:\/\/|urn:)[^<>"{}|^`\\\s]{1,995}$/u;
+const TRUST_PROJECTION_OUTBOX_KEY = "buzz-dkg-trust-projections.v1";
+
+interface PendingTrustProjection {
+  channelId: string;
+  sourceEventId: string;
+  sourceEvent: RelayEvent;
+  sourcePublished: boolean;
+  proposalBody: string;
+}
 
 interface MemoryProposalResponse {
   state?: string;
@@ -25,6 +34,88 @@ function eventIdFromUri(value: string | null): string | null {
   return HEX_EVENT.test(eventId) ? eventId.toLowerCase() : null;
 }
 
+function normalizeTrustText(value: string, maxBytes: number): string {
+  const normalized = value
+    .replace(/\p{Cc}+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (!normalized || new TextEncoder().encode(normalized).length > maxBytes) {
+    throw new Error(`Text must contain 1–${maxBytes} UTF-8 bytes.`);
+  }
+  return normalized;
+}
+
+function boundedDisplayName(value: string, fallback: string): string {
+  const normalized = value
+    .replace(/\p{Cc}+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  let bytes = 0;
+  let result = "";
+  for (const character of normalized) {
+    const size = new TextEncoder().encode(character).length;
+    if (bytes + size > 500) break;
+    bytes += size;
+    result += character;
+  }
+  return result || fallback;
+}
+
+function readProjectionOutbox(): PendingTrustProjection[] {
+  try {
+    const value = JSON.parse(
+      localStorage.getItem(TRUST_PROJECTION_OUTBOX_KEY) ?? "[]",
+    );
+    if (!Array.isArray(value)) return [];
+    return value.filter(
+      (entry): entry is PendingTrustProjection =>
+        typeof entry?.channelId === "string" &&
+        typeof entry?.sourceEventId === "string" &&
+        HEX_EVENT.test(entry.sourceEventId) &&
+        typeof entry?.sourceEvent === "object" &&
+        entry.sourceEvent !== null &&
+        entry.sourceEvent.id === entry.sourceEventId &&
+        typeof entry?.sourcePublished === "boolean" &&
+        typeof entry?.proposalBody === "string" &&
+        entry.proposalBody.length <= 128 * 1_024,
+    );
+  } catch {
+    return [];
+  }
+}
+
+function writeProjectionOutbox(entries: PendingTrustProjection[]): boolean {
+  try {
+    if (entries.length === 0) {
+      localStorage.removeItem(TRUST_PROJECTION_OUTBOX_KEY);
+    } else {
+      localStorage.setItem(
+        TRUST_PROJECTION_OUTBOX_KEY,
+        JSON.stringify(entries.slice(-50)),
+      );
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function queueProjection(entry: PendingTrustProjection): boolean {
+  const entries = readProjectionOutbox().filter(
+    (candidate) => candidate.sourceEventId !== entry.sourceEventId,
+  );
+  entries.push(entry);
+  return writeProjectionOutbox(entries);
+}
+
+function clearProjection(sourceEventId: string): void {
+  writeProjectionOutbox(
+    readProjectionOutbox().filter(
+      (entry) => entry.sourceEventId !== sourceEventId,
+    ),
+  );
+}
+
 async function postTrustMemoryProposal(
   body: string,
 ): Promise<MemoryProposalResponse> {
@@ -36,7 +127,7 @@ async function postTrustMemoryProposal(
   return { ...result, ...normalizeMemoryProposalResponse(result, status) };
 }
 
-async function projectTrustSource(
+async function publishAndProjectTrustSource(
   channelId: string,
   source: RelayEvent,
   content: Record<string, unknown>,
@@ -50,16 +141,78 @@ async function projectTrustSource(
       ["e", source.id, "", "source"],
     ],
   });
-  const body = JSON.stringify(proposal);
+  const pending = {
+    channelId,
+    sourceEventId: source.id,
+    sourceEvent: source,
+    sourcePublished: false,
+    proposalBody: JSON.stringify(proposal),
+  };
+  const durable = queueProjection(pending);
+  try {
+    await relayClient.publishEvent(
+      source,
+      "The signed trust event timed out before the relay confirmed it.",
+      "The relay could not publish the signed trust event.",
+    );
+    pending.sourcePublished = true;
+    queueProjection(pending);
+  } catch (cause) {
+    if (!durable) throw cause;
+    return { eventId: source.id, state: "projection_pending" };
+  }
+
   const deadline = Date.now() + 120_000;
-  do {
-    const result = await postTrustMemoryProposal(body);
-    if (memoryProposalProgress(result.state) !== "processing") {
-      return { eventId: source.id, state: result.state };
+  try {
+    do {
+      const result = await postTrustMemoryProposal(pending.proposalBody);
+      if (memoryProposalProgress(result.state) !== "processing") {
+        clearProjection(source.id);
+        return { eventId: source.id, state: result.state };
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 2_000));
+    } while (Date.now() < deadline);
+    return { eventId: source.id, state: "processing" };
+  } catch (cause) {
+    if (!durable) throw cause;
+    return { eventId: source.id, state: "projection_pending" };
+  }
+}
+
+/** Retry exact signed graph proposals without publishing duplicate trust events. */
+export async function retryPendingTrustProjections(
+  channelId: string,
+): Promise<{ completed: number; remaining: number }> {
+  const pending = readProjectionOutbox().filter(
+    (entry) => entry.channelId === channelId,
+  );
+  let completed = 0;
+  for (const entry of pending) {
+    try {
+      if (!entry.sourcePublished) {
+        await relayClient.publishEvent(
+          entry.sourceEvent,
+          "The queued trust event timed out before the relay confirmed it.",
+          "The relay could not publish the queued trust event.",
+        );
+        entry.sourcePublished = true;
+        queueProjection(entry);
+      }
+      const result = await postTrustMemoryProposal(entry.proposalBody);
+      if (memoryProposalProgress(result.state) === "stored") {
+        clearProjection(entry.sourceEventId);
+        completed += 1;
+      }
+    } catch {
+      // Keep the exact signed proposal queued for the next bounded retry.
     }
-    await new Promise((resolve) => window.setTimeout(resolve, 2_000));
-  } while (Date.now() < deadline);
-  return { eventId: source.id, state: "processing" };
+  }
+  return {
+    completed,
+    remaining: readProjectionOutbox().filter(
+      (entry) => entry.channelId === channelId,
+    ).length,
+  };
 }
 
 /** Publish a human-signed vouch and project its exact evidence into channel memory. */
@@ -84,11 +237,13 @@ export async function publishTrustVouch({
   lifecycleState?: string;
 }> {
   const subject = subjectPubkey.toLowerCase();
-  const displayName = subjectName.trim().slice(0, 500) || subject.slice(0, 12);
-  const normalizedNote = note.trim();
+  const displayName = boundedDisplayName(subjectName, subject.slice(0, 12));
+  let normalizedNote: string;
   if (!HEX_PUBKEY.test(subject)) throw new Error("Invalid vouch subject.");
-  if (!normalizedNote || normalizedNote.length > 1_000) {
-    throw new Error("A vouch explanation must contain 1–1,000 characters.");
+  try {
+    normalizedNote = normalizeTrustText(note, 1_000);
+  } catch {
+    throw new Error("A vouch explanation must contain 1–1,000 UTF-8 bytes.");
   }
   const selectedEvidence = [
     ...new Map(evidence.map((item) => [item.uri, item])).values(),
@@ -117,14 +272,8 @@ export async function publishTrustVouch({
   if (vouch.pubkey.toLowerCase() === subject) {
     throw new Error("You cannot vouch for your own identity.");
   }
-  await relayClient.publishEvent(
-    vouch,
-    "The signed vouch timed out before the relay confirmed it.",
-    "The relay could not publish the signed vouch.",
-  );
-
   const issuer = vouch.pubkey.toLowerCase();
-  const result = await projectTrustSource(channelId, vouch, {
+  const result = await publishAndProjectTrustSource(channelId, vouch, {
     schemaVersion: 2,
     profiles: ["dkg-memory@1", "dkg-trust@1"],
     summary: `Vouch for ${displayName}`,
@@ -194,6 +343,13 @@ export async function publishTrustVouch({
   });
   return {
     ...result,
+    state:
+      result.state === "projection_pending" ||
+      lifecycle.state === "projection_pending"
+        ? "projection_pending"
+        : result.state === "processing" || lifecycle.state === "processing"
+          ? "processing"
+          : result.state,
     lifecycleEventId: lifecycle.eventId,
     lifecycleState: lifecycle.state,
   };
@@ -217,7 +373,7 @@ async function publishTrustVouchLifecycle({
   const subject = subjectPubkey.toLowerCase();
   const target = targetEventId.toLowerCase();
   const replacement = replacementEventId?.toLowerCase();
-  const normalizedReason = reason.trim();
+  let normalizedReason: string;
   if (!HEX_PUBKEY.test(subject) || !HEX_EVENT.test(target)) {
     throw new Error("Invalid vouch lifecycle target.");
   }
@@ -228,8 +384,10 @@ async function publishTrustVouchLifecycle({
   ) {
     throw new Error("Invalid replacement vouch.");
   }
-  if (!normalizedReason || normalizedReason.length > 1_000) {
-    throw new Error("A lifecycle reason must contain 1–1,000 characters.");
+  try {
+    normalizedReason = normalizeTrustText(reason, 1_000);
+  } catch {
+    throw new Error("A lifecycle reason must contain 1–1,000 UTF-8 bytes.");
   }
   const lifecycle = await signRelayEvent({
     kind: 1985,
@@ -243,14 +401,9 @@ async function publishTrustVouchLifecycle({
       ...(replacement ? [["e", replacement, "", "replacement"]] : []),
     ],
   });
-  await relayClient.publishEvent(
-    lifecycle,
-    "The signed trust update timed out before the relay confirmed it.",
-    "The relay could not publish the signed trust update.",
-  );
   const issuer = lifecycle.pubkey.toLowerCase();
   const status = action === "revoke" ? "revoked" : "superseded";
-  return projectTrustSource(channelId, lifecycle, {
+  return publishAndProjectTrustSource(channelId, lifecycle, {
     schemaVersion: 2,
     profiles: ["dkg-memory@1", "dkg-trust@1"],
     summary: action === "revoke" ? "Revoke vouch" : "Supersede vouch",
