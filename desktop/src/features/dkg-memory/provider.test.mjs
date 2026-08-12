@@ -146,6 +146,33 @@ test("community gateway uses active relay URL and a fresh payload-bound NIP-98 e
   assert.notEqual(nonces[0], nonces[1]);
 });
 
+test("disabled provider metadata survives an authenticated error response", async () => {
+  installTauri();
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        error: "reputation provider is not configured",
+        resolution: "disabled",
+        providerId: "null",
+        providerVersion: "1",
+        asOf: "2026-08-12T10:00:00Z",
+        sourceDiagnostics: [],
+      }),
+      { status: 404 },
+    );
+
+  await assert.rejects(
+    () => fetchTrustNetwork(CHANNEL_ID),
+    (error) => {
+      assert.equal(error instanceof DkgProviderError, true);
+      assert.equal(error.status, 404);
+      assert.equal(error.reputation.resolution, "disabled");
+      assert.equal(error.reputation.providerId, "null");
+      return true;
+    },
+  );
+});
+
 test("semantic queries are explicitly current-channel scoped and expose their cost", async () => {
   installTauri();
   let requestBody;

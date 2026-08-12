@@ -89,18 +89,21 @@ export class DkgProviderError extends Error {
   status: number;
   code?: string;
   details?: unknown;
+  reputation?: ReputationProviderMetadata;
 
   constructor(
     message: string,
     status: number,
     code?: string,
     details?: unknown,
+    reputation?: ReputationProviderMetadata,
   ) {
     super(message);
     this.name = "DkgProviderError";
     this.status = status;
     this.code = code;
     this.details = details;
+    this.reputation = reputation;
   }
 }
 
@@ -222,6 +225,7 @@ export async function postAuthenticatedDkgJson<Result>({
       response.status,
       error.code,
       error.details,
+      reputationProviderMetadata(payload),
     );
   }
   return { result: (payload ?? {}) as Result, status: response.status };
@@ -261,9 +265,9 @@ function validateEnvelope<Operation extends DkgQueryOperation>(
 }
 
 function reputationProviderMetadata(
-  envelope: CommunityGatewayEnvelope,
-): Partial<ReputationProviderMetadata> {
-  if (envelope.resolution === undefined) return {};
+  value: unknown,
+): ReputationProviderMetadata | undefined {
+  if (!isRecord(value) || value.resolution === undefined) return undefined;
   const resolutions = new Set<ReputationResolution>([
     "disabled",
     "complete",
@@ -271,15 +275,16 @@ function reputationProviderMetadata(
     "unavailable",
   ]);
   if (
-    !resolutions.has(envelope.resolution) ||
-    typeof envelope.providerId !== "string" ||
-    typeof envelope.providerVersion !== "string" ||
-    typeof envelope.asOf !== "string" ||
-    !Array.isArray(envelope.sourceDiagnostics)
+    typeof value.resolution !== "string" ||
+    !resolutions.has(value.resolution as ReputationResolution) ||
+    typeof value.providerId !== "string" ||
+    typeof value.providerVersion !== "string" ||
+    typeof value.asOf !== "string" ||
+    !Array.isArray(value.sourceDiagnostics)
   ) {
     throw protocolError("invalid reputation-provider metadata");
   }
-  for (const diagnostic of envelope.sourceDiagnostics) {
+  for (const diagnostic of value.sourceDiagnostics) {
     if (
       !isRecord(diagnostic) ||
       typeof diagnostic.sourceId !== "string" ||
@@ -291,12 +296,11 @@ function reputationProviderMetadata(
     }
   }
   return {
-    resolution: envelope.resolution,
-    providerId: envelope.providerId,
-    providerVersion: envelope.providerVersion,
-    asOf: envelope.asOf,
-    sourceDiagnostics:
-      envelope.sourceDiagnostics as ReputationSourceDiagnostic[],
+    resolution: value.resolution as ReputationResolution,
+    providerId: value.providerId,
+    providerVersion: value.providerVersion,
+    asOf: value.asOf,
+    sourceDiagnostics: value.sourceDiagnostics as ReputationSourceDiagnostic[],
   };
 }
 
@@ -327,7 +331,7 @@ function adaptCommunityResult<Operation extends DkgQueryOperation>(
     case "semantic_query":
       return {
         ...envelope.result,
-        ...reputationProviderMetadata(envelope),
+        ...(reputationProviderMetadata(envelope) ?? {}),
         gate: "ok",
         cg: envelope.cg,
       };
