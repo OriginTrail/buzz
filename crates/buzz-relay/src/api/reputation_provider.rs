@@ -222,8 +222,17 @@ impl ReputationProvider for DkgProvider<'_> {
 
         match dkg_query::bounded_json_response(response).await {
             Ok((status, Json(value))) if status.is_success() => {
-                let resolution = resolution_from_gateway(&value);
-                ReputationBatch::dkg(resolution, (status, Json(value)), None)
+                match validate_gateway_success(request, &value) {
+                    Ok(resolution) => ReputationBatch::dkg(resolution, (status, Json(value)), None),
+                    Err(detail) => ReputationBatch::dkg(
+                        ResolutionState::Unavailable,
+                        api_error(
+                            StatusCode::BAD_GATEWAY,
+                            "reputation provider returned an invalid success envelope",
+                        ),
+                        Some(detail.to_string()),
+                    ),
+                }
             }
             Ok(response) => ReputationBatch::dkg(
                 ResolutionState::Unavailable,
@@ -237,6 +246,57 @@ impl ReputationProvider for DkgProvider<'_> {
             ),
         }
     }
+}
+
+fn validate_gateway_success(
+    request: &Value,
+    response: &Value,
+) -> Result<ResolutionState, &'static str> {
+    let expected_channel = request
+        .get("channelId")
+        .and_then(Value::as_str)
+        .ok_or("provider request channel is invalid")?;
+    let expected_operation = request
+        .get("operation")
+        .and_then(Value::as_str)
+        .ok_or("provider request operation is invalid")?;
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err("provider success envelope did not assert ok=true");
+    }
+    if response.get("channelId").and_then(Value::as_str) != Some(expected_channel) {
+        return Err("provider response channel did not match the authorized request");
+    }
+    if response.get("operation").and_then(Value::as_str) != Some(expected_operation) {
+        return Err("provider response operation did not match the authorized request");
+    }
+    if !response
+        .get("cg")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty())
+    {
+        return Err("provider response omitted the resolved Context Graph");
+    }
+    let result = response
+        .get("result")
+        .and_then(Value::as_object)
+        .ok_or("provider response result was not an object")?;
+    match expected_operation {
+        "trust_network"
+            if result.get("people").is_some_and(Value::is_array)
+                && result.get("vouches").is_some_and(Value::is_array) => {}
+        "reputation_summary"
+            if result.get("subject").is_some_and(Value::is_string)
+                && result.get("perspective").is_some_and(Value::is_string)
+                && result.get("score").is_some_and(Value::is_number)
+                && result.get("breakdown").is_some_and(Value::is_object)
+                && result.get("signals").is_some_and(Value::is_object)
+                && result.get("evidence").is_some_and(Value::is_array) => {}
+        "trust_network" | "reputation_summary" => {
+            return Err("provider response result did not match the requested operation");
+        }
+        _ => return Err("unsupported operation reached the reputation provider"),
+    }
+    Ok(resolution_from_gateway(response))
 }
 
 /// Runtime provider selection. The null provider is the deterministic default.
@@ -320,6 +380,46 @@ mod tests {
             resolution_from_gateway(&serde_json::json!({"result": {}})),
             ResolutionState::Partial
         );
+    }
+
+    #[test]
+    fn gateway_success_is_bound_to_the_authorized_request_and_result_shape() {
+        let request = serde_json::json!({
+            "channelId": "channel",
+            "operation": "trust_network"
+        });
+        let valid = serde_json::json!({
+            "ok": true,
+            "channelId": "channel",
+            "cg": "did:dkg:context-graph:channel",
+            "operation": "trust_network",
+            "result": {"completeness": "complete", "people": [], "vouches": []}
+        });
+        assert_eq!(
+            validate_gateway_success(&request, &valid),
+            Ok(ResolutionState::Complete)
+        );
+
+        for malformed in [
+            serde_json::json!({}),
+            serde_json::json!({"result": {"completeness": "complete"}}),
+            serde_json::json!({
+                "ok": true,
+                "channelId": "other-channel",
+                "cg": "did:dkg:context-graph:channel",
+                "operation": "trust_network",
+                "result": {"people": [], "vouches": []}
+            }),
+            serde_json::json!({
+                "ok": true,
+                "channelId": "channel",
+                "cg": "did:dkg:context-graph:channel",
+                "operation": "reputation_summary",
+                "result": {"people": [], "vouches": []}
+            }),
+        ] {
+            assert!(validate_gateway_success(&request, &malformed).is_err());
+        }
     }
 
     #[test]
