@@ -6,6 +6,7 @@ import { Card } from "@/shared/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import type { ChannelMemory } from "../api";
 import { explorerSource, nodeUiDeepLink } from "../api";
+import { shouldShowDkgWebOfTrustUi } from "../featureFlags";
 import { useContributorTrail, useProfileNames } from "../hooks";
 import { EvidenceCard } from "./EvidenceCard";
 import { GraphOverlay, type GraphOverlayTarget } from "./GraphOverlay";
@@ -56,6 +57,7 @@ export function MemoryOverview({
   const topicCount = (data.subgraphs ?? []).filter(
     (subgraph) => subgraph.entityCount > 0,
   ).length;
+  const showWebOfTrust = shouldShowDkgWebOfTrustUi(trustAvailable);
 
   return (
     <>
@@ -105,7 +107,7 @@ export function MemoryOverview({
 
       <Tabs defaultValue="overview" className="min-h-0">
         <TabsList
-          className={`grid h-8 w-full ${trustAvailable ? "grid-cols-3" : "grid-cols-2"}`}
+          className={`grid h-8 w-full ${showWebOfTrust ? "grid-cols-3" : "grid-cols-2"}`}
         >
           <TabsTrigger value="overview" className="py-0.5 text-xs">
             Overview
@@ -113,7 +115,7 @@ export function MemoryOverview({
           <TabsTrigger value="search" className="py-0.5 text-xs">
             Search graph
           </TabsTrigger>
-          {trustAvailable && (
+          {showWebOfTrust && (
             <TabsTrigger value="trust" className="py-0.5 text-xs">
               Trust
             </TabsTrigger>
@@ -292,7 +294,7 @@ export function MemoryOverview({
           </details>
         </TabsContent>
 
-        {trustAvailable && (
+        {showWebOfTrust && (
           <TabsContent value="trust" className="space-y-4">
             <WebOfTrustPanel
               channelId={channelId}
