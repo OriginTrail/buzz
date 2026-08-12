@@ -655,6 +655,55 @@ test("a vouch signs and publishes human evidence before proposing its DKG projec
   assert.equal(signed.at(-1).kind, 27235);
 });
 
+test("a memory-only relay stores a signed vouch without queuing unsupported trust projection", async () => {
+  const issuer = "a".repeat(64);
+  const subject = "b".repeat(64);
+  const signed = [];
+  installTauri("https://relay.example/", (args) => {
+    const event = {
+      id: String(signed.length + 1).repeat(64),
+      sig: "c".repeat(128),
+      pubkey: issuer,
+      kind: args.kind,
+      created_at: 1_786_363_200 + signed.length,
+      tags: args.tags,
+      content: args.content,
+    };
+    signed.push(event);
+    return event;
+  });
+  const storage = new Map();
+  globalThis.localStorage = {
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, String(value)),
+    removeItem: (key) => storage.delete(key),
+  };
+  const published = [];
+  mock.method(relayClient, "publishEvent", async (event) =>
+    published.push(event),
+  );
+  const requests = [];
+  globalThis.fetch = async (url) => {
+    requests.push(String(url));
+    return new Response(
+      JSON.stringify({ supported_extensions: ["buzz-dkg-memory-v1"] }),
+    );
+  };
+
+  const result = await publishTrustVouch({
+    channelId: CHANNEL_ID,
+    subjectPubkey: subject,
+    subjectName: "Alice",
+    note: "Reviewed the release.",
+  });
+
+  assert.equal(result.state, "stored");
+  assert.equal(signed.length, 1, "no DKG proposal or NIP-98 event is signed");
+  assert.deepEqual(published, [signed[0]]);
+  assert.deepEqual(requests, ["https://relay.example/"]);
+  assert.equal(storage.has("buzz-dkg-trust-projections.v1"), false);
+});
+
 test("revoke publishes an append-only signed lifecycle event and exact DKG projection", async () => {
   const issuer = "a".repeat(64);
   const subject = "b".repeat(64);

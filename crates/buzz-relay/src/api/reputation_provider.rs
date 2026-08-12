@@ -495,22 +495,19 @@ impl<'a> LocalProvider<'a> {
             .into_iter()
             .map(|claim| claim.value)
             .collect::<Vec<_>>();
-        let response = (
-            StatusCode::OK,
-            Json(json!({
-                "ok": true,
-                "channelId": self.channel_id,
-                "cg": format!("urn:buzz:relay-reputation:{}:{}", self.community, self.channel_id),
-                "operation": "trust_network",
-                "result": {
-                    "completeness": if partial { "partial" } else { "complete" },
-                    "people": people,
-                    "vouches": vouches,
-                    "claims": values,
-                    "nextCursor": next_cursor,
-                }
-            })),
-        );
+        let response = bounded_local_response(json!({
+            "ok": true,
+            "channelId": self.channel_id,
+            "cg": format!("urn:buzz:relay-reputation:{}:{}", self.community, self.channel_id),
+            "operation": "trust_network",
+            "result": {
+                "completeness": if partial { "partial" } else { "complete" },
+                "people": people,
+                "vouches": vouches,
+                "claims": values,
+                "nextCursor": next_cursor,
+            }
+        }))?;
         Ok(LocalTrustResult {
             response,
             resolution,
@@ -654,8 +651,20 @@ fn source_document(stored: &StoredEvent) -> Value {
         "author": stored.event.pubkey.to_hex(),
         "signature": stored.event.sig.to_string(),
         "verified": stored.is_verified(),
-        "event": serde_json::to_value(&stored.event).unwrap_or(Value::Null),
     })
+}
+
+fn bounded_local_response(value: Value) -> Result<ApiResponse, String> {
+    let bytes = serde_json::to_vec(&value)
+        .map_err(|_| "relay-local reputation response could not be serialized".to_string())?;
+    // Reserve headroom for provider metadata that is added by into_http_result.
+    let maximum = dkg_query::MAX_RESPONSE_BYTES.saturating_sub(16 * 1024);
+    if bytes.len() > maximum {
+        return Err(format!(
+            "relay-local reputation response exceeds the bounded {maximum}-byte result limit"
+        ));
+    }
+    Ok((StatusCode::OK, Json(value)))
 }
 
 fn normalize_vouch_claims(
@@ -1328,8 +1337,16 @@ mod tests {
             "https://example.test/evidence/1"
         );
         assert_eq!(claims[0].value["source"]["verified"], true);
-        assert!(claims[0].value["source"]["event"]["sig"].is_string());
+        assert!(claims[0].value["source"]["signature"].is_string());
+        assert!(claims[0].value["source"].get("event").is_none());
         assert!(claims[0].value["lifecycle"]["source"]["eventId"].is_string());
+    }
+
+    #[test]
+    fn local_provider_enforces_the_public_response_byte_bound() {
+        let oversized = json!({"claims": ["x".repeat(dkg_query::MAX_RESPONSE_BYTES)]});
+        assert!(bounded_local_response(oversized).is_err());
+        assert!(bounded_local_response(json!({"claims": []})).is_ok());
     }
 
     #[test]

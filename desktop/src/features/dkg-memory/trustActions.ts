@@ -131,7 +131,8 @@ async function postTrustMemoryProposal(
 async function relayProjectsTrustToDkg(): Promise<boolean> {
   try {
     const relay = (await getRelayHttpUrl()).replace(/\/+$/, "");
-    return (await fetchDkgMemoryCapabilities(relay)).memory;
+    const capabilities = await fetchDkgMemoryCapabilities(relay);
+    return capabilities.memory && capabilities.trust;
   } catch {
     // Discovery failure is not proof that projection is disabled. Preserve
     // the durable DKG path and let its authenticated request decide.
