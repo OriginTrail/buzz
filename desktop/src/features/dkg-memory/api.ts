@@ -302,7 +302,7 @@ export async function runDkgDiagnostics(
     const query = await timedDiagnostic(() =>
       fetchSemanticQuery(
         channelId,
-        `PREFIX schema: <http://schema.org/>\nASK WHERE { GRAPH ?g { ?entity schema:name ?name . } }`,
+        `PREFIX schema: <http://schema.org/>\nSELECT ?entity WHERE { GRAPH ?g { ?entity schema:name ?name . } } LIMIT 1`,
         "shared",
       ),
     );
