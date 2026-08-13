@@ -303,6 +303,7 @@ export async function runDkgDiagnostics(
       fetchSemanticQuery(
         channelId,
         `PREFIX schema: <http://schema.org/>\nASK WHERE { GRAPH ?g { ?entity schema:name ?name . } }`,
+        "shared",
       ),
     );
     checks.push({

@@ -3,7 +3,8 @@ import { getRelayHttpUrl, signRelayEvent } from "@/shared/api/tauri";
 const LOCAL_EXPLORER = "http://127.0.0.1:9295";
 const LOCAL_PROBE_TIMEOUT_MS = 1_500;
 const QUERY_TIMEOUT_MS = 25_000;
-const CHANNEL_GRAPH_TIMEOUT_MS = 60_000;
+const CHANNEL_MEMORY_TIMEOUT_MS = 90_000;
+const CHANNEL_GRAPH_TIMEOUT_MS = 115_000;
 const NIP98_KIND = 27235;
 
 export type ExplorerSource = "local" | "gateway";
@@ -295,7 +296,9 @@ async function communityGatewayQuery<
     timeoutMs:
       query.operation === "channel_triples"
         ? CHANNEL_GRAPH_TIMEOUT_MS
-        : QUERY_TIMEOUT_MS,
+        : query.operation === "channel_memory"
+          ? CHANNEL_MEMORY_TIMEOUT_MS
+          : QUERY_TIMEOUT_MS,
   });
   const envelope = validateEnvelope(result, query);
   return adaptCommunityResult(envelope) as Result;
