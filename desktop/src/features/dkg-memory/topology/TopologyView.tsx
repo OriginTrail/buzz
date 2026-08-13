@@ -11,9 +11,10 @@
 // NodePanel inspector. "Entity types" coloring is the node-parity default;
 // "Contributors" preserves the attribution view (recorded attribution,
 // not verification).
-import { Suspense, lazy, useMemo, useState } from "react";
+import { Suspense, lazy, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchTopologyTriples, type TopologyTarget } from "./client";
+import { GraphNavigationControls } from "./GraphNavigationControls";
 import {
   applyHeaviestSubjectsCap,
   attributionLegend,
@@ -46,6 +47,9 @@ const BUZZ_NS = "https://w3id.org/buzz-dkg/buzz#";
 export const NODE_UI_GRAPH_OPTIONS = {
   labelMode: "humanized" as const,
   renderer: "2d" as const,
+  // RdfGraph's initialFit performs the one intended camera fit. Disabling the
+  // renderer's additional settle-time fit keeps later user zoom intact.
+  autoFitDisabled: true,
   labels: { predicates: NODE_UI_LABEL_PREDICATES },
   style: {
     classColors: {
@@ -96,6 +100,8 @@ export function TopologyView({
   const [colorMode, setColorMode] = useState<"entity" | "attribution">(
     "entity",
   );
+  const [fitRevision, setFitRevision] = useState(0);
+  const graphSurfaceRef = useRef<HTMLDivElement>(null);
   const channelWide = target.kind === "channel";
   const query = useQuery({
     queryKey: [
@@ -222,6 +228,10 @@ export function TopologyView({
               </span>
             </span>
           ))}
+        <GraphNavigationControls
+          surfaceRef={graphSurfaceRef}
+          onFit={() => setFitRevision((revision) => revision + 1)}
+        />
         <span className="ml-auto text-2xs text-muted-foreground">
           {summary.entities} entities · {summary.relationships} relationships ·{" "}
           {channelWide
@@ -237,7 +247,12 @@ export function TopologyView({
       {/* Dark node-idiom island: the renderer's palette is tuned for the DKG
           node UI's canvas (#0a0a0f); rendering on that background *is* the
           node look — bright hexagons, thin edges, light labels. */}
-      <div className="min-h-0 flex-1" style={{ background: "#0a0a0f" }}>
+      <div
+        ref={graphSurfaceRef}
+        data-buzz-wheel-surface
+        className="min-h-0 flex-1"
+        style={{ background: "#0a0a0f" }}
+      >
         <Suspense
           fallback={
             <div className="p-6 text-sm text-muted-foreground">
@@ -246,6 +261,7 @@ export function TopologyView({
           }
         >
           <RdfGraph
+            key={`${colorMode}-${fitRevision}`}
             data={graphData}
             format="triples"
             options={
