@@ -8,6 +8,7 @@ import {
   fetchTrustNetwork,
 } from "./api";
 import { fetchDkgMemoryCapabilities } from "./capabilities";
+import { dkgReadQueryPolicy } from "./queryLoadPolicy";
 
 const CAPABILITY_RETRY_DELAYS_MS = [250, 1_000, 5_000] as const;
 
@@ -61,7 +62,7 @@ export function useChannelMemory(
     queryKey: ["dkg-memory", "memory", channelId, cg],
     queryFn: () => fetchChannelMemory(channelId as string, cg ?? null),
     enabled: Boolean(channelId) && bindingResolved,
-    refetchInterval: 30 * 1000,
+    ...dkgReadQueryPolicy,
   });
 }
 
@@ -83,7 +84,7 @@ export function useTrustNetwork(channelId: string | null) {
     queryKey: ["dkg-memory", "trust-network", channelId],
     queryFn: () => fetchTrustNetwork(channelId as string),
     enabled: Boolean(channelId),
-    refetchInterval: 30 * 1000,
+    ...dkgReadQueryPolicy,
   });
 }
 
@@ -96,7 +97,7 @@ export function useReputationSummary(
     queryFn: () =>
       fetchReputationSummary(channelId as string, pubkey as string),
     enabled: Boolean(channelId && pubkey),
-    staleTime: 30 * 1_000,
+    ...dkgReadQueryPolicy,
   });
 }
 

@@ -4,6 +4,7 @@ import {
   History,
   Link2,
   Loader2,
+  RefreshCw,
   ShieldCheck,
   ShieldX,
   UserRoundCheck,
@@ -212,6 +213,17 @@ export function WebOfTrustPanel({
             ? network.error.message
             : "The community DKG did not return a trust network."}
         </p>
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          className="mt-3"
+          disabled={network.isFetching}
+          onClick={() => void network.refetch()}
+        >
+          <RefreshCw className={network.isFetching ? "animate-spin" : ""} />
+          Try again
+        </Button>
       </Card>
     );
   }
@@ -242,7 +254,20 @@ export function WebOfTrustPanel({
             signed vouches
           </p>
         </div>
-        <Badge variant="success">DKG evidence</Badge>
+        <div className="flex items-center gap-1.5">
+          <Badge variant="success">DKG evidence</Badge>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            disabled={network.isFetching}
+            onClick={() => void network.refetch()}
+            title="Refresh trust evidence"
+            aria-label="Refresh trust evidence"
+          >
+            <RefreshCw className={network.isFetching ? "animate-spin" : ""} />
+          </Button>
+        </div>
       </div>
 
       {people.length === 0 ? (
