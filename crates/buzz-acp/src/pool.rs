@@ -583,6 +583,11 @@ pub struct PromptContext {
     /// When true, each substantive channel turn gets a bounded, fail-open
     /// relevant-memory lookup before the agent starts work.
     pub dkg_semantic_query: bool,
+    /// Agent-memory proposal schema advertised by the active relay.
+    ///
+    /// A value enables the runtime-owned post-turn semantic side-output and
+    /// signed proposal submission path. `None` keeps non-DKG relays unchanged.
+    pub dkg_memory_schema: Option<u8>,
     /// Shared channel metadata for startup-known and dynamically joined channels.
     pub channel_info: ChannelInfoResolver,
     /// Max messages to include in thread/DM context. 0 = disabled.
@@ -1443,6 +1448,62 @@ fn send_prompt_result(
     });
 }
 
+async fn finalize_dkg_memory_after_success(
+    agent: &mut OwnedAgent,
+    source: &PromptSource,
+    session_id: &str,
+    ctx: &PromptContext,
+    triggering_event_ids: &[String],
+    turn_started_at: u64,
+) {
+    let (Some(schema), PromptSource::Channel(channel_id)) = (ctx.dkg_memory_schema, source) else {
+        return;
+    };
+    let outcome = crate::dkg_memory::finalize_turn(
+        agent,
+        session_id,
+        ctx,
+        *channel_id,
+        triggering_event_ids,
+        turn_started_at,
+        schema,
+    )
+    .await;
+    match outcome {
+        crate::dkg_memory::PostTurnMemoryOutcome::Stored { proposal_event_id } => {
+            tracing::info!(
+                channel = %channel_id,
+                %proposal_event_id,
+                "automatic post-turn DKG memory accepted"
+            );
+            agent.acp.observe(
+                "dkg_memory_finalized",
+                serde_json::json!({
+                    "status": "accepted",
+                    "proposalEventId": proposal_event_id,
+                }),
+            );
+        }
+        crate::dkg_memory::PostTurnMemoryOutcome::SkippedNoResponse => {
+            tracing::debug!(
+                channel = %channel_id,
+                "automatic post-turn DKG memory skipped because the turn published no response"
+            );
+        }
+        crate::dkg_memory::PostTurnMemoryOutcome::Failed(error) => {
+            tracing::warn!(
+                channel = %channel_id,
+                %error,
+                "automatic post-turn DKG memory was not accepted"
+            );
+            agent.acp.observe(
+                "dkg_memory_finalized",
+                serde_json::json!({ "status": "pending_or_failed", "error": error }),
+            );
+        }
+    }
+}
+
 /// Core async function spawned for each prompt.
 ///
 /// Lifecycle:
@@ -1473,6 +1534,7 @@ pub async fn run_prompt_task(
         PromptSource::Channel(channel_id) => Some(*channel_id),
         PromptSource::Heartbeat => None,
     };
+    let turn_started_unix = nostr::Timestamp::now().as_secs();
     let turn_started_at = chrono::Utc::now().to_rfc3339();
     agent.acp.set_observer_context(observer::context_for_turn(
         observer_channel_id,
@@ -1491,7 +1553,7 @@ pub async fn run_prompt_task(
                 PromptSource::Channel(_) => "channel",
                 PromptSource::Heartbeat => "heartbeat",
             },
-            "triggeringEventIds": triggering_event_ids,
+            "triggeringEventIds": &triggering_event_ids,
         }),
     );
 
@@ -2283,6 +2345,15 @@ pub async fn run_prompt_task(
                             &source,
                             &control_signal,
                         );
+                        finalize_dkg_memory_after_success(
+                            &mut agent,
+                            &source,
+                            &session_id,
+                            &ctx,
+                            &triggering_event_ids,
+                            turn_started_unix,
+                        )
+                        .await;
                         let usage = agent.acp.take_turn_usage();
                         publish_agent_turn_metric(
                             &ctx,
@@ -2322,6 +2393,16 @@ pub async fn run_prompt_task(
             } else if !agent.has_system_prompt_support() {
                 agent.state.heartbeat_standing_context_sent = true;
             }
+
+            finalize_dkg_memory_after_success(
+                &mut agent,
+                &source,
+                &session_id,
+                &ctx,
+                &triggering_event_ids,
+                turn_started_unix,
+            )
+            .await;
 
             let should_rotate = matches!(
                 stop_reason,
@@ -7470,6 +7551,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":0,"result":{{"stopReason":"end_turn"}}}}'"
                 auth_tag_json: None,
             },
             dkg_semantic_query: false,
+            dkg_memory_schema: None,
             channel_info: ChannelInfoResolver::new(
                 std::collections::HashMap::new(),
                 RestClient {

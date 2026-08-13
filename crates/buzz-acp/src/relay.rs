@@ -466,6 +466,21 @@ impl RestClient {
             .await
             .map_err(|e| RelayError::Http(format!("DKG query response error: {e}")))
     }
+
+    /// Submit a signed agent-memory proposal through the authenticated relay.
+    ///
+    /// The relay binds the signed event to channel evidence and forwards it to
+    /// the configured DKG provider. A successful 2xx response means the
+    /// provider durably accepted the proposal, even when graph materialization
+    /// is still processing.
+    pub async fn submit_dkg_memory(&self, event: &Event) -> Result<Value, RelayError> {
+        let body_bytes = serde_json::to_vec(event)
+            .map_err(|e| RelayError::Http(format!("DKG memory serialize error: {e}")))?;
+        let resp = self.bridge_post("/api/dkg/memory", &body_bytes).await?;
+        resp.json()
+            .await
+            .map_err(|e| RelayError::Http(format!("DKG memory response error: {e}")))
+    }
 }
 
 /// Events the harness cares about.
