@@ -3,6 +3,8 @@ import { getRelayHttpUrl, signRelayEvent } from "@/shared/api/tauri";
 const LOCAL_EXPLORER = "http://127.0.0.1:9295";
 const LOCAL_PROBE_TIMEOUT_MS = 1_500;
 const QUERY_TIMEOUT_MS = 25_000;
+const CHANNEL_MEMORY_TIMEOUT_MS = 90_000;
+const CHANNEL_GRAPH_TIMEOUT_MS = 115_000;
 const NIP98_KIND = 27235;
 
 export type ExplorerSource = "local" | "gateway";
@@ -16,6 +18,7 @@ export type DkgQueryOperation =
   | "reputation_summary"
   | "subgraph_graph"
   | "subgraph_triples"
+  | "channel_triples"
   | "evidence"
   | "semantic_query";
 
@@ -36,6 +39,7 @@ type DkgQueryArguments = {
   reputation_summary: { pubkey: string };
   subgraph_graph: { name: string };
   subgraph_triples: { name: string };
+  channel_triples: Record<string, never>;
   evidence: { uri: string };
   semantic_query: {
     sparql: string;
@@ -264,6 +268,7 @@ function adaptCommunityResult<Operation extends DkgQueryOperation>(
     case "reputation_summary":
     case "subgraph_graph":
     case "subgraph_triples":
+    case "channel_triples":
     case "semantic_query":
       return { ...envelope.result, gate: "ok", cg: envelope.cg };
     case "evidence":
@@ -288,6 +293,12 @@ async function communityGatewayQuery<
   const { result } = await postAuthenticatedDkgJson<unknown>({
     path: "/api/dkg/query",
     body,
+    timeoutMs:
+      query.operation === "channel_triples"
+        ? CHANNEL_GRAPH_TIMEOUT_MS
+        : query.operation === "channel_memory"
+          ? CHANNEL_MEMORY_TIMEOUT_MS
+          : QUERY_TIMEOUT_MS,
   });
   const envelope = validateEnvelope(result, query);
   return adaptCommunityResult(envelope) as Result;

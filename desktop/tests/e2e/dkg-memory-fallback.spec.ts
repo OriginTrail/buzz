@@ -338,9 +338,9 @@ test("named subgraph lens queries the provider and keeps Graph available", async
   await expect(
     overlay.getByRole("button", { name: "Contributors" }),
   ).toBeVisible();
-  await expect(
-    overlay.getByText(/2 connected entities · 1 relationships/i),
-  ).toBeVisible({ timeout: 15_000 });
+  await expect(overlay.getByText(/2 entities · 1 relationships/i)).toBeVisible({
+    timeout: 15_000,
+  });
   await expectPaintedGraphCanvas(overlay);
   expect(tripleRequests).toHaveLength(1);
   expect(new URL(tripleRequests[0]).searchParams.get("name")).toBe(

@@ -245,6 +245,7 @@ fn dkg_memory_descriptor(trust_enabled: bool) -> serde_json::Value {
         "decision_trace",
         "subgraph_graph",
         "subgraph_triples",
+        "channel_triples",
         "evidence",
         "semantic_query",
     ];
@@ -469,6 +470,9 @@ mod tests {
         assert!(descriptor["query_operations"]
             .as_array()
             .is_some_and(|operations| operations.contains(&serde_json::json!("semantic_query"))));
+        assert!(descriptor["query_operations"]
+            .as_array()
+            .is_some_and(|operations| operations.contains(&serde_json::json!("channel_triples"))));
         assert!(descriptor["query_operations"].as_array().is_some_and(
             |operations| operations.contains(&serde_json::json!("reputation_summary"))
         ));

@@ -69,7 +69,7 @@ export const NODE_UI_GRAPH_OPTIONS = {
     edgeWidth: 0.9,
   },
   hexagon: { baseSize: 4, minSize: 3, maxSize: 6, scaleWithDegree: true },
-  focus: { maxNodes: 3000, hops: 999 },
+  focus: { maxNodes: 20_000, hops: 999 },
 };
 
 export interface TopologyNeighbor {
@@ -113,8 +113,12 @@ export function TopologyView({
   const shaped = useMemo(() => {
     const triples = query.data?.triples ?? [];
     const bounded = applyHeaviestSubjectsCap(triples);
-    const { canvasTriples, singletonItems } =
-      splitGraphTriplesForShelf(bounded);
+    const shelf = splitGraphTriplesForShelf(bounded);
+    // The channel action is explicitly the complete Context Graph view: keep
+    // every returned triple in the renderer. A named subgraph retains the
+    // compact singleton shelf used by the focused inspection UI.
+    const canvasTriples = channelWide ? bounded : shelf.canvasTriples;
+    const singletonItems = channelWide ? [] : shelf.singletonItems;
     return {
       canvasTriples,
       singletonItems,
@@ -122,7 +126,7 @@ export function TopologyView({
       legend: attributionLegend(bounded),
       dropped: triples.length - bounded.length,
     };
-  }, [query.data]);
+  }, [channelWide, query.data]);
 
   const graphData = useMemo(
     () =>
@@ -219,14 +223,14 @@ export function TopologyView({
             </span>
           ))}
         <span className="ml-auto text-2xs text-muted-foreground">
-          {summary.entities} connected entities · {summary.relationships}{" "}
-          relationships ·{" "}
+          {summary.entities} entities · {summary.relationships} relationships ·{" "}
           {channelWide
-            ? "bounded channel view · use search to narrow further"
+            ? `complete channel view · up to ${query.data?.limit?.toLocaleString() ?? "10,000"} triples`
             : colorMode === "attribution"
               ? "colors = recorded attribution, not verification"
               : "colors = entity types, as in your DKG node"}
-          {shaped.dropped > 0 && ` · ${shaped.dropped} triples beyond cap`}
+          {(query.data?.truncated || shaped.dropped > 0) &&
+            " · graph reached the safety cap"}
         </span>
       </div>
 

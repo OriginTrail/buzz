@@ -128,7 +128,7 @@ export function topologySummary(triples: TopologyTriple[]): {
   return { entities: entities.size, relationships: relationships.size };
 }
 
-const MAX_TRIPLES = 2500;
+const MAX_TRIPLES = 10_000;
 export function applyHeaviestSubjectsCap(
   triples: TopologyTriple[],
   max: number = MAX_TRIPLES,
