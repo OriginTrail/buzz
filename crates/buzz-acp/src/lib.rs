@@ -237,13 +237,13 @@ async fn relay_dkg_capabilities(relay_url: &str) -> DkgCapabilities {
     for attempt in 0..DKG_CAPABILITY_ATTEMPTS {
         match fetch_relay_dkg_capabilities(relay_url).await {
             Ok(capabilities) => return capabilities,
-            Err(error) if attempt + 1 < DKG_CAPABILITY_ATTEMPTS => {
-                let delay = DKG_CAPABILITY_RETRY_DELAYS[attempt];
-                tracing::warn!(attempt = attempt + 1, %error, ?delay, "relay capability discovery failed; retrying");
-                tokio::time::sleep(delay).await;
-            }
             Err(error) => {
-                tracing::warn!(attempt = attempt + 1, %error, "relay capability discovery failed; DKG memory disabled for this agent session");
+                if let Some(&delay) = DKG_CAPABILITY_RETRY_DELAYS.get(attempt) {
+                    tracing::warn!(attempt = attempt + 1, %error, ?delay, "relay capability discovery failed; retrying");
+                    tokio::time::sleep(delay).await;
+                } else {
+                    tracing::warn!(attempt = attempt + 1, %error, "relay capability discovery failed; DKG memory disabled for this agent session");
+                }
             }
         }
     }
