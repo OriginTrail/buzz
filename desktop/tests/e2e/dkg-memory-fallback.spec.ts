@@ -170,6 +170,15 @@ test("flat capture: All-decisions lens resolves evidence into Traces and Graph",
     overlay.getByText(/5 entities · 2 relationships/i),
   ).toBeVisible();
   await expectPaintedGraphCanvas(overlay);
+  await expect(
+    overlay.getByRole("button", { name: "Zoom graph in" }),
+  ).toBeVisible();
+  await expect(
+    overlay.getByRole("button", { name: "Zoom graph out" }),
+  ).toBeVisible();
+  await expect(
+    overlay.getByRole("button", { name: "Fit graph to view" }),
+  ).toBeVisible();
   expect(subgraphRequests).toEqual([]);
   await waitForAnimations(page);
 });

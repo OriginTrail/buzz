@@ -79,6 +79,26 @@ test("locks viewport rubber-band outside conversation scrollers", async ({
       deltaY: -120,
     }),
   ).resolves.toBe(false);
+
+  // Canvas interactions such as the DKG topology use wheel gestures for zoom
+  // without a native scroll container. The viewport guard must not consume
+  // those events before the renderer receives them.
+  await page.evaluate(() => {
+    const graph = document.createElement("section");
+    graph.dataset.buzzWheelSurface = "";
+    graph.dataset.testid = "interactive-wheel-surface";
+    document.body.append(graph);
+  });
+  await expect(
+    dispatchWheelPrevented(page, '[data-testid="interactive-wheel-surface"]', {
+      deltaY: -120,
+    }),
+  ).resolves.toBe(false);
+  await expect(
+    dispatchWheelPrevented(page, '[data-testid="interactive-wheel-surface"]', {
+      deltaX: 120,
+    }),
+  ).resolves.toBe(true);
 });
 
 test("locks horizontal viewport pan everywhere", async ({ page }) => {

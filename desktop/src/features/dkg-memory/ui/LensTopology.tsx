@@ -3,9 +3,10 @@
 // TopologyView — but fed triples projected from the lens graph instead of a
 // provider round-trip, so the Graph view stays scoped to exactly what the
 // lens shows. Render-only: node clicks select, they never navigate.
-import { Suspense, lazy, useMemo } from "react";
+import { Suspense, lazy, useMemo, useRef, useState } from "react";
 import type { LensGraph } from "../lensGraphs";
 import { lensTriples } from "../lensGraphs";
+import { GraphNavigationControls } from "../topology/GraphNavigationControls";
 import { NODE_UI_GRAPH_OPTIONS } from "../topology/TopologyView";
 
 const RdfGraph = lazy(() =>
@@ -27,16 +28,27 @@ export function LensTopology({
   onSelectUri: (uri: string, label?: string) => void;
 }) {
   const triples = useMemo(() => lensTriples(graph), [graph]);
+  const [fitRevision, setFitRevision] = useState(0);
+  const graphSurfaceRef = useRef<HTMLDivElement>(null);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
+        <GraphNavigationControls
+          surfaceRef={graphSurfaceRef}
+          onFit={() => setFitRevision((revision) => revision + 1)}
+        />
         <span className="text-2xs text-muted-foreground">
           {graph.nodes.length} entities · {graph.edges.length} relationships ·
           colors = entity types, as in your DKG node
         </span>
       </div>
-      <div className="min-h-0 flex-1" style={{ background: "#0a0a0f" }}>
+      <div
+        ref={graphSurfaceRef}
+        data-buzz-wheel-surface
+        className="min-h-0 flex-1"
+        style={{ background: "#0a0a0f" }}
+      >
         <Suspense
           fallback={
             <div className="p-6 text-sm text-muted-foreground">
@@ -45,6 +57,7 @@ export function LensTopology({
           }
         >
           <RdfGraph
+            key={fitRevision}
             data={triples}
             format="triples"
             options={NODE_UI_GRAPH_OPTIONS}

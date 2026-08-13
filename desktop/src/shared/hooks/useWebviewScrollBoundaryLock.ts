@@ -3,6 +3,7 @@ import * as React from "react";
 const BOUNDARY_EPSILON_PX = 1;
 const CONVERSATION_SCROLL_SELECTOR = "[data-buzz-conversation-scroll]";
 const TERMINAL_SUBSTRATE_SELECTOR = '[data-terminal-owner="terminal"]';
+const INTERACTIVE_WHEEL_SURFACE_SELECTOR = "[data-buzz-wheel-surface]";
 const SCROLLABLE_OVERFLOW_VALUES = new Set(["auto", "scroll", "overlay"]);
 
 function isHTMLElement(value: EventTarget | null): value is HTMLElement {
@@ -96,6 +97,21 @@ export function useWebviewScrollBoundaryLock(enabled = true) {
       }
 
       const path = event.composedPath();
+      // Canvas-based surfaces (for example, the DKG graph) consume wheel and
+      // trackpad gestures as zoom input without exposing a native scroll
+      // container. Let those gestures reach the surface instead of treating
+      // them as dead space that would rubber-band the webview.
+      if (
+        Math.abs(deltaY) >= Math.abs(deltaX) &&
+        path.some(
+          (target) =>
+            isHTMLElement(target) &&
+            target.matches(INTERACTIVE_WHEEL_SURFACE_SELECTOR),
+        )
+      ) {
+        return;
+      }
+
       let firstScrollable: HTMLElement | null = null;
       let targetsTerminal = false;
 
