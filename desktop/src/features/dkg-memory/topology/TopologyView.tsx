@@ -43,7 +43,7 @@ const NODE_UI_LABEL_PREDICATES = [
   "http://xmlns.com/foaf/0.1/name",
 ];
 const BUZZ_NS = "https://w3id.org/buzz-dkg/buzz#";
-const NODE_UI_GRAPH_OPTIONS = {
+export const NODE_UI_GRAPH_OPTIONS = {
   labelMode: "humanized" as const,
   renderer: "2d" as const,
   labels: { predicates: NODE_UI_LABEL_PREDICATES },
@@ -72,6 +72,12 @@ const NODE_UI_GRAPH_OPTIONS = {
   focus: { maxNodes: 3000, hops: 999 },
 };
 
+export interface TopologyNeighbor {
+  rel: string;
+  uri: string;
+  label: string;
+}
+
 export function TopologyView({
   channelId,
   cg,
@@ -81,7 +87,11 @@ export function TopologyView({
   channelId: string;
   cg: string | null;
   target: TopologyTarget;
-  onSelectUri: (uri: string, label?: string) => void;
+  onSelectUri: (
+    uri: string,
+    label?: string,
+    neighbors?: TopologyNeighbor[],
+  ) => void;
 }) {
   const [colorMode, setColorMode] = useState<"entity" | "attribution">(
     "entity",
@@ -127,6 +137,33 @@ export function TopologyView({
     () => topologySummary(shaped.canvasTriples),
     [shaped.canvasTriples],
   );
+
+  // One-hop neighborhood of a clicked entity, from the triples already on the
+  // canvas — the evidence rail shows the entity's trail without a re-query.
+  const selectWithNeighbors = (uri: string, label?: string) => {
+    const names = new Map<string, string>();
+    for (const t of shaped.canvasTriples) {
+      if (
+        NODE_UI_LABEL_PREDICATES.includes(t.predicate) &&
+        t.object.startsWith('"')
+      ) {
+        names.set(t.subject, t.object.slice(1).replace(/"$/, ""));
+      }
+    }
+    const neighbors: { rel: string; uri: string; label: string }[] = [];
+    const seen = new Set<string>();
+    for (const t of shaped.canvasTriples) {
+      if (t.object.startsWith('"')) continue;
+      const other =
+        t.subject === uri ? t.object : t.object === uri ? t.subject : null;
+      if (!other) continue;
+      const rel = t.predicate.split(/[/#]/).pop() ?? t.predicate;
+      if (rel === "type" || seen.has(`${rel}|${other}`)) continue;
+      seen.add(`${rel}|${other}`);
+      neighbors.push({ rel, uri: other, label: names.get(other) ?? other });
+    }
+    onSelectUri(uri, label, neighbors);
+  };
 
   if (query.isLoading) {
     return (
@@ -219,7 +256,7 @@ export function TopologyView({
                   }
             }
             initialFit
-            onNodeClick={(node) => onSelectUri(node.id, node.label)}
+            onNodeClick={(node) => selectWithNeighbors(node.id, node.label)}
             className="h-full w-full"
             style={{ height: "100%" }}
           >
@@ -249,7 +286,7 @@ export function TopologyView({
                 key={item.uri}
                 type="button"
                 title={item.uri}
-                onClick={() => onSelectUri(item.uri, item.label)}
+                onClick={() => selectWithNeighbors(item.uri, item.label)}
                 className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-2xs hover:bg-muted"
               >
                 {item.label.slice(0, 32)}

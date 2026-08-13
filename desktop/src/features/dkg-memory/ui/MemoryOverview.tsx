@@ -7,9 +7,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import type { ChannelMemory } from "../api";
 import { explorerSource, nodeUiDeepLink } from "../api";
 import { shouldShowDkgWebOfTrustUi } from "../featureFlags";
-import { useContributorTrail, useProfileNames } from "../hooks";
+import { useProfileNames } from "../hooks";
 import { EvidenceCard } from "./EvidenceCard";
 import { GraphOverlay, type GraphOverlayTarget } from "./GraphOverlay";
+import { openExternal } from "./openExternal";
 import { MemorySearch } from "./MemorySearch";
 import { SoftwareMemoryQuery } from "./SoftwareMemoryQuery";
 import { WebOfTrustPanel } from "./WebOfTrustPanel";
@@ -37,11 +38,9 @@ export function MemoryOverview({
   trustAvailable: boolean;
   reputationAvailable: boolean;
 }) {
-  const [trailPubkey, setTrailPubkey] = useState<string | null>(null);
   const [graphTarget, setGraphTarget] = useState<GraphOverlayTarget | null>(
     null,
   );
-  const trail = useContributorTrail(channelId, cg, trailPubkey);
   const contributorPubkeys = (data.contributors ?? []).map(
     (contributor) => contributor.pubkey,
   );
@@ -77,6 +76,7 @@ export function MemoryOverview({
           <a
             className="ml-auto shrink-0 text-2xs text-primary hover:underline"
             href={nodeUiDeepLink(cg)}
+            onClick={(event) => openExternal(event, nodeUiDeepLink(cg))}
             target="_blank"
             rel="noreferrer"
           >
@@ -169,7 +169,7 @@ export function MemoryOverview({
             </section>
           )}
 
-          {sortedDecisions.length > 0 && topicCount === 0 && (
+          {sortedDecisions.length > 0 && (
             <section>
               <SectionTitle icon={<Network />}>Timeline</SectionTitle>
               <Button
@@ -228,56 +228,34 @@ export function MemoryOverview({
             <section>
               <SectionTitle icon={<Users />}>People &amp; agents</SectionTitle>
               <div className="flex flex-wrap gap-1.5">
-                {data.contributors.map((contributor) => (
-                  <Button
-                    key={contributor.pubkey}
-                    type="button"
-                    variant={
-                      trailPubkey === contributor.pubkey
-                        ? "secondary"
-                        : "outline"
-                    }
-                    size="xs"
-                    onClick={() =>
-                      setTrailPubkey(
-                        trailPubkey === contributor.pubkey
-                          ? null
-                          : contributor.pubkey,
-                      )
-                    }
-                  >
-                    {profiles.data?.[contributor.pubkey] ??
-                      shortPk(contributor.pubkey)}
-                    <span className="text-muted-foreground">
-                      {contributor.events}
-                    </span>
-                  </Button>
-                ))}
-              </div>
-              {trailPubkey && (
-                <div className="mt-2 max-h-48 space-y-2 overflow-y-auto rounded-xl border border-border/70 bg-muted/20 p-2.5">
-                  {trail.isLoading && (
-                    <div className="text-xs text-muted-foreground">
-                      Loading trail…
-                    </div>
-                  )}
-                  {trail.data?.map((entry) => (
-                    <div key={entry.event} className="text-xs leading-relaxed">
+                {data.contributors.map((contributor) => {
+                  const name =
+                    profiles.data?.[contributor.pubkey] ??
+                    shortPk(contributor.pubkey);
+                  return (
+                    <Button
+                      key={contributor.pubkey}
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      onClick={() =>
+                        setGraphTarget({
+                          kind: "contributor",
+                          pubkey: contributor.pubkey,
+                          name,
+                        })
+                      }
+                      title={`Open ${name}'s decisions and evidence as Traces & Graph`}
+                      data-testid={`dkg-contributor-${contributor.pubkey}`}
+                    >
+                      {name}
                       <span className="text-muted-foreground">
-                        {entry.at
-                          ? new Date(entry.at * 1000).toLocaleString()
-                          : ""}
-                      </span>{" "}
-                      {entry.content ?? "Structured entity"}
-                      {entry.decisionName && (
-                        <div className="text-primary">
-                          ↳ {entry.decisionName}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
+                        {contributor.events}
+                      </span>
+                    </Button>
+                  );
+                })}
+              </div>
             </section>
           )}
         </TabsContent>

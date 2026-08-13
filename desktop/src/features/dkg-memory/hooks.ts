@@ -144,6 +144,77 @@ export function useSubgraphGraph(
   });
 }
 
+import type { DecisionEntry } from "./api";
+import { fetchDecisionsEvidence } from "./api";
+import {
+  buildContributorGraph,
+  buildDecisionsGraph,
+  type LensGraph,
+} from "./lensGraphs";
+
+/**
+ * Enrich the all-decisions lens with evidence envelopes. Keyed by the decision
+ * URI set so a re-render with the same lens does not refetch the fan-out.
+ */
+export function useDecisionsGraph(
+  channelId: string | null,
+  cg: string | null | undefined,
+  decisions: DecisionEntry[] | null,
+) {
+  const uriKey = (decisions ?? []).map((decision) => decision.uri).join(",");
+  return useQuery<LensGraph>({
+    queryKey: ["dkg-memory", "decisions-graph", channelId, cg, uriKey],
+    queryFn: async () => {
+      const list = decisions as DecisionEntry[];
+      const envelopes = await fetchDecisionsEvidence(
+        channelId as string,
+        cg ?? null,
+        list,
+      );
+      return buildDecisionsGraph(list, envelopes);
+    },
+    enabled: Boolean(channelId && decisions && decisions.length > 0),
+    staleTime: 60 * 1000,
+  });
+}
+
+import { probeNodeUi } from "./api";
+
+/**
+ * Device-scoped: is a DKG node UI answering locally? Independent of the
+ * panel's read path — gateway reads and a running node UI can coexist.
+ */
+export function useNodeUiPresence(enabled: boolean) {
+  return useQuery({
+    queryKey: ["dkg-memory", "node-ui-presence"],
+    queryFn: probeNodeUi,
+    enabled,
+    retry: false,
+    staleTime: 30 * 1000,
+  });
+}
+
+/** One participant's trail, shaped for the Traces/Graph overlay. */
+export function useContributorGraph(
+  channelId: string | null,
+  cg: string | null | undefined,
+  pubkey: string | null,
+) {
+  return useQuery<LensGraph>({
+    queryKey: ["dkg-memory", "contributor-graph", channelId, cg, pubkey],
+    queryFn: async () => {
+      const trail = await fetchContributorTrail(
+        channelId as string,
+        cg ?? null,
+        pubkey as string,
+      );
+      return buildContributorGraph(trail);
+    },
+    enabled: Boolean(channelId && pubkey),
+    staleTime: 30 * 1000,
+  });
+}
+
 export function useDiscoveryFallback(
   channelId: string | null,
   enabled: boolean,
