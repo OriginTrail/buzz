@@ -7,11 +7,7 @@
 import { relayClient } from "@/shared/api/relayClient";
 import { getRelayHttpUrl, signRelayEvent } from "@/shared/api/tauri";
 import { fetchDkgMemoryCapabilities } from "./capabilities";
-import {
-  isLoopbackExplorer,
-  postAuthenticatedDkgJson,
-  queryDkgProvider,
-} from "./provider";
+import { postAuthenticatedDkgJson, queryDkgProvider } from "./provider";
 import {
   memoryProposalProgress,
   normalizeMemoryProposalResponse,
@@ -670,44 +666,6 @@ export async function fetchEvidence(
   });
 }
 
-// ── Node-UI presence ─────────────────────────────────────────────────────────
-// The deep link targets the node UI's own origin, which is independent of how
-// PANEL READS resolve: a device can read memory through the community provider
-// (e.g. its node doesn't hold this CG yet) while still running a node UI that
-// can open the asset. So the affordance is gated on a direct reachability
-// probe, not on the read path.
-const NODE_UI_ORIGIN = "http://127.0.0.1:9200";
-const NODE_UI_PROBE_TIMEOUT_MS = 1_500;
-
-function nodeUiOrigin(): string {
-  try {
-    const override = localStorage.getItem("dkg-memory-node-ui-url");
-    if (override && isLoopbackExplorer(override)) {
-      return override.replace(/\/+$/, "");
-    }
-  } catch {
-    // Storage is optional; use the loopback default.
-  }
-  return NODE_UI_ORIGIN;
-}
-
-/**
- * True when a DKG node UI answers on this device. Any HTTP response counts —
- * the probe proves the origin exists; the node UI itself communicates whether
- * it holds the requested CG.
- */
-export async function probeNodeUi(): Promise<boolean> {
-  try {
-    await fetch(`${nodeUiOrigin()}/ui/`, {
-      mode: "no-cors",
-      signal: AbortSignal.timeout(NODE_UI_PROBE_TIMEOUT_MS),
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Deep link into the patched edge-node UI, landed on this CG. With an
  * entity URI the UI opens the single CG tab and focuses that entity inside
@@ -717,7 +675,7 @@ export function nodeUiDeepLink(
   cg: string,
   opts?: { layer?: "wm" | "swm" | "vm"; entity?: string },
 ): string {
-  const base = `${nodeUiOrigin()}/ui/?cg=${encodeURIComponent(cg)}`;
+  const base = `http://127.0.0.1:9200/ui/?cg=${encodeURIComponent(cg)}`;
   if (opts?.entity) return `${base}&entity=${encodeURIComponent(opts.entity)}`;
   return opts?.layer ? `${base}&layer=${opts.layer}` : base;
 }

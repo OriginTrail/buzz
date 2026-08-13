@@ -178,22 +178,6 @@ export function useDecisionsGraph(
   });
 }
 
-import { probeNodeUi } from "./api";
-
-/**
- * Device-scoped: is a DKG node UI answering locally? Independent of the
- * panel's read path — gateway reads and a running node UI can coexist.
- */
-export function useNodeUiPresence(enabled: boolean) {
-  return useQuery({
-    queryKey: ["dkg-memory", "node-ui-presence"],
-    queryFn: probeNodeUi,
-    enabled,
-    retry: false,
-    staleTime: 30 * 1000,
-  });
-}
-
 /** One participant's trail, shaped for the Traces/Graph overlay. */
 export function useContributorGraph(
   channelId: string | null,

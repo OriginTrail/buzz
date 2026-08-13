@@ -87,7 +87,7 @@ export class DkgProviderError extends Error {
 let resolvedLocalExplorer: string | null | undefined;
 let lastSource: ExplorerSource | null = null;
 
-export function isLoopbackExplorer(raw: string): boolean {
+function isLoopbackExplorer(raw: string): boolean {
   try {
     const url = new URL(raw);
     return (

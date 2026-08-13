@@ -53,6 +53,38 @@ async function openMemoryPanel(
   return panel;
 }
 
+async function expectPaintedGraphCanvas(
+  overlay: import("@playwright/test").Locator,
+) {
+  const canvas = overlay.locator("canvas").first();
+  await expect(canvas).toBeVisible({ timeout: 20_000 });
+  await expect
+    .poll(
+      () =>
+        canvas.evaluate((node) => {
+          const element = node as HTMLCanvasElement;
+          const context = element.getContext("2d", {
+            willReadFrequently: true,
+          });
+          if (!context || element.width === 0 || element.height === 0) return 0;
+          const pixels = context.getImageData(
+            0,
+            0,
+            element.width,
+            element.height,
+          ).data;
+          let painted = 0;
+          for (let index = 3; index < pixels.length; index += 4) {
+            if (pixels[index] > 0) painted += 1;
+            if (painted >= 10) break;
+          }
+          return painted;
+        }),
+      { timeout: 20_000 },
+    )
+    .toBeGreaterThanOrEqual(10);
+}
+
 test("flat capture: All-decisions lens resolves evidence into Traces and Graph", async ({
   page,
 }) => {
@@ -137,6 +169,7 @@ test("flat capture: All-decisions lens resolves evidence into Traces and Graph",
   await expect(
     overlay.getByText(/5 entities · 2 relationships/i),
   ).toBeVisible();
+  await expectPaintedGraphCanvas(overlay);
   expect(subgraphRequests).toEqual([]);
   await waitForAnimations(page);
 });
@@ -198,7 +231,11 @@ test("contributor chip opens that participant's Traces lens", async ({
   await expect(
     overlay.getByText("evidence not yet feeding a decision (1)"),
   ).toBeVisible();
-  await expect(overlay.getByTestId("dkg-topology-toggle")).toBeVisible();
+  await overlay.getByTestId("dkg-topology-toggle").click();
+  await expect(
+    overlay.getByText(/3 entities · 1 relationships/i),
+  ).toBeVisible();
+  await expectPaintedGraphCanvas(overlay);
   await waitForAnimations(page);
 });
 
@@ -304,35 +341,7 @@ test("named subgraph lens queries the provider and keeps Graph available", async
   await expect(
     overlay.getByText(/2 connected entities · 1 relationships/i),
   ).toBeVisible({ timeout: 15_000 });
-  const topologyCanvas = overlay.locator("canvas").first();
-  await expect(topologyCanvas).toBeVisible({
-    timeout: 20_000,
-  });
-  await expect
-    .poll(
-      () =>
-        topologyCanvas.evaluate((node) => {
-          const canvas = node as HTMLCanvasElement;
-          const context = canvas.getContext("2d", {
-            willReadFrequently: true,
-          });
-          if (!context || canvas.width === 0 || canvas.height === 0) return 0;
-          const pixels = context.getImageData(
-            0,
-            0,
-            canvas.width,
-            canvas.height,
-          ).data;
-          let painted = 0;
-          for (let index = 3; index < pixels.length; index += 4) {
-            if (pixels[index] > 0) painted += 1;
-            if (painted >= 10) break;
-          }
-          return painted;
-        }),
-      { timeout: 20_000 },
-    )
-    .toBeGreaterThanOrEqual(10);
+  await expectPaintedGraphCanvas(overlay);
   expect(tripleRequests).toHaveLength(1);
   expect(new URL(tripleRequests[0]).searchParams.get("name")).toBe(
     "engineering",

@@ -38,6 +38,8 @@ const TICK_MAX_GAP = 40;
 export interface GraphSelection {
   node: GraphNode;
   neighbors: { rel: string; node: GraphNode }[];
+  /** Explicit provider evidence lookup for a selection with no graph trail. */
+  evidenceUri?: string;
 }
 
 interface Props {
@@ -188,7 +190,11 @@ export function GraphCanvas({ nodes, edges, selectedId, onSelect }: Props) {
       seen.add(`${e.rel}|${other.id}`);
       neighbors.push({ rel: e.rel, node: other });
     }
-    onSelect({ node, neighbors });
+    onSelect({
+      node,
+      neighbors,
+      evidenceUri: neighbors.length === 0 ? node.id : undefined,
+    });
   };
 
   const jumpTo = (id: string) => {

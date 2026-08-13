@@ -55,6 +55,7 @@ function selectionFor(
     return {
       node: { id: uri, kind: "claim", label: label ?? uri, at: null },
       neighbors: [],
+      evidenceUri: uri,
     };
   }
   const neighbors: GraphSelection["neighbors"] = [];
@@ -68,7 +69,11 @@ function selectionFor(
     seen.add(`${edge.rel}|${other.id}`);
     neighbors.push({ rel: edge.rel, node: other });
   }
-  return { node: known, neighbors };
+  return {
+    node: known,
+    neighbors,
+    evidenceUri: neighbors.length === 0 ? known.id : undefined,
+  };
 }
 
 const LAYER_META = {
@@ -304,20 +309,22 @@ function ChannelGraphOverlay({
         channelId={channelId}
         cg={cg}
         target={target}
-        onSelectUri={(uri, label, neighbors) =>
+        onSelectUri={(uri, label, neighbors) => {
+          const resolvedNeighbors = (neighbors ?? []).map((neighbor) => ({
+            rel: neighbor.rel,
+            node: {
+              id: neighbor.uri,
+              kind: "claim" as const,
+              label: neighbor.label,
+              at: null,
+            },
+          }));
           setSelection({
             node: { id: uri, kind: "claim", label: label ?? uri, at: null },
-            neighbors: (neighbors ?? []).map((neighbor) => ({
-              rel: neighbor.rel,
-              node: {
-                id: neighbor.uri,
-                kind: "claim",
-                label: neighbor.label,
-                at: null,
-              },
-            })),
-          })
-        }
+            neighbors: resolvedNeighbors,
+            evidenceUri: resolvedNeighbors.length === 0 ? uri : undefined,
+          });
+        }}
       />
     </GraphOverlayShell>
   );
@@ -583,15 +590,10 @@ function EvidenceRail({
   channelId: string;
   cg: string | null;
 }) {
-  const { node, neighbors } = selection;
-  // Entity pivot: when the lens graph carries no links for this node, ask the
-  // provider for its evidence envelope so the rail still resolves a trail —
-  // and say so honestly when nothing was captured.
-  const envelope = useEvidence(
-    channelId,
-    cg,
-    neighbors.length === 0 ? node.id : null,
-  );
+  const { node, neighbors, evidenceUri } = selection;
+  // Evidence resolution is chosen by the overlay/selection owner. The rail
+  // renders that policy but never infers network work from incidental shape.
+  const envelope = useEvidence(channelId, cg, evidenceUri ?? null);
   const sources =
     envelope.data?.found === false ? [] : (envelope.data?.sources ?? []);
   return (
@@ -654,10 +656,10 @@ function EvidenceRail({
           </div>
         </section>
       )}
-      {neighbors.length === 0 && envelope.isLoading && (
+      {evidenceUri && envelope.isLoading && (
         <p className="text-2xs text-muted-foreground">Resolving evidence…</p>
       )}
-      {neighbors.length === 0 && envelope.isSuccess && sources.length > 0 && (
+      {evidenceUri && envelope.isSuccess && sources.length > 0 && (
         <section data-testid="dkg-entity-evidence">
           <h4 className="mb-1 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
             Captured evidence
@@ -681,7 +683,7 @@ function EvidenceRail({
           </div>
         </section>
       )}
-      {neighbors.length === 0 && envelope.isSuccess && sources.length === 0 && (
+      {evidenceUri && envelope.isSuccess && sources.length === 0 && (
         <p className="text-2xs text-muted-foreground">
           No captured evidence resolvable for this entity yet.
         </p>
