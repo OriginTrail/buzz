@@ -2,6 +2,7 @@
 
 mod acp;
 mod config;
+mod dkg_memory;
 mod dkg_queries;
 mod dkg_recall;
 mod engram_fetch;
@@ -70,17 +71,21 @@ const AUTHENTICATE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 const DKG_MEMORY_AGENT_INSTRUCTIONS_V1: &str = r#"## DKG Channel Memory
 
-This relay supports agent-authored DKG memory. After every normal channel turn in which you successfully publish a Buzz response, submit one signed memory proposal before ending the turn. Use the current channel UUID, the triggering message event ID(s), and your newly published response `event_id` as `--source` evidence:
+This relay supports agent-authored DKG memory. After every successful normal channel turn, the Buzz harness automatically starts a separate memory-finalization phase. During the human-facing response phase, publish the Buzz response normally but do not submit a memory proposal yourself. During the memory-finalization phase, return only the requested JSON semantic side output; the harness binds the triggering and response event IDs, signs the proposal, persists it for retry, and submits it.
+
+For manual recovery or debugging, the equivalent explicit command is:
 
 ```sh
 printf '%s' '{"schemaVersion":1,"summary":"...","items":[{"kind":"decision|claim|question|task|relationship","text":"..."}],"model":"...","promptVersion":"agent-memory-v1"}' | buzz memory propose --channel <current-channel-uuid> --source <trigger-event-id> --source <your-response-event-id> --input -
 ```
 
-Extract concise outcomes, claims, open questions, tasks, and relationships from that turn. Relationship items also require `subject`, `predicate`, and `object`; `confidence` is optional from 0 to 1. Record only externally communicable semantics and evidence—never hidden reasoning, chain-of-thought, secrets, credentials, or tool traces. Do not send a second chat message about the memory operation. If proposal submission fails, keep the human response intact and surface the failure only when it affects the requested work."#;
+Extract concise outcomes, claims, open questions, tasks, and relationships from that turn. Relationship items also require `subject`, `predicate`, and `object`; `confidence` is optional from 0 to 1. Record only externally communicable semantics and evidence—never hidden reasoning, chain-of-thought, secrets, credentials, or tool traces. Never send a second chat message during memory finalization. A memory failure must not retract or duplicate the human-facing response."#;
 
 const DKG_MEMORY_AGENT_INSTRUCTIONS_V2: &str = r#"## DKG Channel Memory
 
-This relay supports versioned, agent-authored DKG memory. After every normal channel turn in which you successfully publish a Buzz response, submit exactly one signed memory proposal before ending the turn. Use the current channel UUID, the triggering message event ID(s), and your newly published response `event_id` as `--source` evidence:
+This relay supports versioned, agent-authored DKG memory. After every successful normal channel turn, the Buzz harness automatically starts a separate memory-finalization phase. During the human-facing response phase, publish the Buzz response normally but do not submit a memory proposal yourself. During the memory-finalization phase, return only the requested JSON semantic side output; the harness binds the triggering and response event IDs, signs the proposal, persists it for retry, and submits it.
+
+For manual recovery or debugging, the equivalent explicit command is:
 
 ```sh
 printf '%s' '{"schemaVersion":2,"profiles":["dkg-memory@1"],"summary":"...","entities":[{"id":"decision-1","type":"decisions:Decision","name":"...","description":"...","attributes":[{"predicate":"decisions:status","value":"accepted"}]},{"id":"topic-1","type":"memory:Entity","name":"..."}],"relations":[{"subject":"decision-1","predicate":"memory:about","object":"topic-1"}],"model":"...","promptVersion":"agent-memory-v2"}' | buzz memory propose --channel <current-channel-uuid> --source <trigger-event-id> --source <your-response-event-id> --input -
@@ -92,7 +97,7 @@ Every relation object uses exactly `subject`, `predicate`, and `object` (plus op
 
 Use compact local entity IDs. For stable software identity, use `locator`: GitHub resources use `{"kind":"github","repository":"owner/repo","resource":"commit|pull-request|issue|repository","id":"..."}`; every code package/file/symbol uses `{"kind":"code","repository":"https://github.com/owner/repo","package":"@scope/package","path":"src/file.ts","symbol":"qualified.name","symbolKind":"function|class|interface|type-alias|enum"}`. Omit path for packages and symbol fields for files, but never omit the canonical HTTPS repository URL. A `schema:Project` requires `{"kind":"uri","uri":"https://canonical.example/project"}`. Reuse exact canonical locators across turns and communities; names are labels, never identity. If evidence provides no trustworthy global locator, use `memory:Entity` and let it remain local rather than inventing an identifier. `schema:sameAs` may connect evidence-backed aliases. Useful literal attributes include `decisions:context|outcome|consequences|status`, `tasks:status|priority|dueDate`, `schema:dateCreated`, `code:language|startLine|endLine`, `github:state|mergedAt`, and `software:result|environment`.
 
-Extract concise entities and queryable relationships supported by the signed turn. Record only externally communicable semantics and evidence—never hidden reasoning, chain-of-thought, secrets, credentials, or tool traces. Do not invent ontology terms. Do not send a second chat message about the memory operation. A proposal response with `state: "processing"` is durably accepted but not queryable yet; only `state: "stored"` confirms completion. If proposal submission fails or remains processing after the CLI wait, keep the human response intact and describe the memory status accurately rather than claiming it was stored."#;
+Extract concise entities and queryable relationships supported by the signed turn. Record only externally communicable semantics and evidence—never hidden reasoning, chain-of-thought, secrets, credentials, or tool traces. Do not invent ontology terms. Never send a second chat message during memory finalization. A proposal response with `state: "processing"` is durably accepted but not queryable yet; only `state: "stored"` confirms completion. A memory failure must not retract or duplicate the human-facing response."#;
 
 const DKG_SEMANTIC_QUERY_AGENT_INSTRUCTIONS: &str = r#"## Query DKG Channel Memory
 
@@ -232,13 +237,13 @@ async fn relay_dkg_capabilities(relay_url: &str) -> DkgCapabilities {
     for attempt in 0..DKG_CAPABILITY_ATTEMPTS {
         match fetch_relay_dkg_capabilities(relay_url).await {
             Ok(capabilities) => return capabilities,
-            Err(error) if attempt + 1 < DKG_CAPABILITY_ATTEMPTS => {
-                let delay = DKG_CAPABILITY_RETRY_DELAYS[attempt];
-                tracing::warn!(attempt = attempt + 1, %error, ?delay, "relay capability discovery failed; retrying");
-                tokio::time::sleep(delay).await;
-            }
             Err(error) => {
-                tracing::warn!(attempt = attempt + 1, %error, "relay capability discovery failed; DKG memory disabled for this agent session");
+                if let Some(&delay) = DKG_CAPABILITY_RETRY_DELAYS.get(attempt) {
+                    tracing::warn!(attempt = attempt + 1, %error, ?delay, "relay capability discovery failed; retrying");
+                    tokio::time::sleep(delay).await;
+                } else {
+                    tracing::warn!(attempt = attempt + 1, %error, "relay capability discovery failed; DKG memory disabled for this agent session");
+                }
             }
         }
     }
@@ -2031,6 +2036,10 @@ async fn tokio_main() -> Result<()> {
     let system_prompt =
         append_dkg_memory_instructions(config.system_prompt.clone(), dkg_capabilities);
 
+    let _dkg_memory_outbox_retry = dkg_capabilities
+        .memory_schema
+        .map(|_| tokio::spawn(dkg_memory::run_outbox_retry(relay.rest_client())));
+
     let base_prompt_content = config.base_prompt_content.take();
     let ctx = Arc::new(PromptContext {
         mcp_servers: build_mcp_servers(&config),
@@ -2056,6 +2065,7 @@ async fn tokio_main() -> Result<()> {
             .to_string(),
         rest_client: relay.rest_client(),
         dkg_semantic_query: dkg_capabilities.semantic_query,
+        dkg_memory_schema: dkg_capabilities.memory_schema,
         channel_info: pool::ChannelInfoResolver::new(channel_info_map, relay.rest_client()),
         context_message_limit: config.context_message_limit,
         max_turns_per_session: config.max_turns_per_session,
