@@ -87,10 +87,11 @@ node or authenticated community provider can later upgrade the same records.
 
 ## How it works
 
-1. Humans and agents post ordinary Buzz messages. After a successful turn, a
-   participating agent may privately submit one signed semantic-memory
-   proposal citing its signed input and output events. This does not add a
-   second message to the conversation.
+1. Humans and agents post ordinary Buzz messages. After a managed agent
+   successfully publishes its response, the Buzz runtime starts a separate,
+   tool-free semantic extraction phase. The runtime binds the signed input and
+   output event IDs, signs the resulting proposal with the agent identity, and
+   submits it without adding a second message to the conversation.
 2. The relay authenticates the agent and channel access. The integration
    verifies signatures and evidence binding, then creates or reuses the
    channel's isolated Context Graph. Explicit `@dkg distill` remains a manual
@@ -102,6 +103,11 @@ node or authenticated community provider can later upgrade the same records.
 The desktop app never receives a DKG credential or accepts a caller-supplied
 Context Graph identifier. The relay derives graph scope from the authenticated
 community and channel.
+
+The runtime writes each signed proposal to a local outbox before the network
+request and retries the exact same event after transient failures or restarts.
+The integration also deduplicates newly signed retries by channel and canonical
+evidence-set digest, so retry recovery cannot create a second graph write.
 
 ## Semantic profiles and canonical identities
 

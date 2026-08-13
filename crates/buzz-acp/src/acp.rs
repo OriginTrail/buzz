@@ -211,6 +211,13 @@ pub struct AcpClient {
     /// deltas. Both goose and buzz-agent emit this notification; goose gates
     /// on client capability advertisement, buzz-agent emits unconditionally.
     goose_usage: UsageTracker,
+    /// Assistant text emitted during the current `session/prompt`.
+    ///
+    /// ACP streams assistant output as `agent_message_chunk` notifications,
+    /// while the terminal response only contains a stop reason. A bounded copy
+    /// lets the harness consume structured side output without asking the
+    /// agent to mutate the workspace or perform the network write itself.
+    agent_message_text: String,
 }
 
 /// Recursively merge `overlay` into `base`, with `overlay` winning on scalar/shape
@@ -550,6 +557,7 @@ impl AcpClient {
             steering_supported: false,
             steer_rx: None,
             goose_usage: UsageTracker::default(),
+            agent_message_text: String::new(),
         })
     }
 
@@ -768,6 +776,7 @@ impl AcpClient {
         idle_timeout: std::time::Duration,
         max_duration: std::time::Duration,
     ) -> Result<StopReason, AcpError> {
+        self.agent_message_text.clear();
         let params = build_prompt_params(session_id, prompt_blocks);
         let hard_deadline = tokio::time::Instant::now() + max_duration;
         self.current_hard_deadline = Some(hard_deadline);
@@ -822,6 +831,11 @@ impl AcpClient {
             }
         }
         self.parse_stop_reason(&result?)
+    }
+
+    /// Take the assistant text streamed during the most recent prompt.
+    pub(crate) fn take_agent_message_text(&mut self) -> String {
+        std::mem::take(&mut self.agent_message_text)
     }
 
     /// Send a `session/cancel` **notification** (no `id` field, no response expected).
@@ -1745,6 +1759,23 @@ impl AcpClient {
         match update_type {
             "agent_message_chunk" => {
                 if let Some(text) = update["content"]["text"].as_str() {
+                    // Match the ACP wire's 10 MiB line ceiling. Structured
+                    // post-turn output is normally a few KiB, but this keeps a
+                    // noisy adapter from growing the capture without bound.
+                    const MAX_CAPTURED_AGENT_MESSAGE: usize = 10 * 1024 * 1024;
+                    let remaining =
+                        MAX_CAPTURED_AGENT_MESSAGE.saturating_sub(self.agent_message_text.len());
+                    if text.len() <= remaining {
+                        self.agent_message_text.push_str(text);
+                    } else if remaining > 0 {
+                        let mut end = remaining.min(text.len());
+                        while end > 0 && !text.is_char_boundary(end) {
+                            end -= 1;
+                        }
+                        if end > 0 {
+                            self.agent_message_text.push_str(&text[..end]);
+                        }
+                    }
                     tracing::info!(target: "acp::stream", "{text}");
                 }
                 false
