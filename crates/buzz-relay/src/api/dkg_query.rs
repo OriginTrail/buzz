@@ -27,7 +27,9 @@ use super::{api_error, bridge, internal_error, not_found};
 
 /// Maximum public request body accepted by `/api/dkg/query`.
 pub(crate) const MAX_REQUEST_BYTES: usize = 16 * 1024;
-pub(super) const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+// A channel graph may contain up to 10,000 bounded triples. Keep the relay
+// ceiling finite, but large enough for that documented response contract.
+pub(super) const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_NAME_BYTES: usize = 256;
 const MAX_URI_BYTES: usize = 2048;
 const MAX_SPARQL_BYTES: usize = 8 * 1024;
@@ -61,6 +63,7 @@ enum Operation {
     ReputationSummary,
     SubgraphGraph,
     SubgraphTriples,
+    ChannelTriples,
     Evidence,
     SemanticQuery,
 }
@@ -231,7 +234,7 @@ fn parse_and_sanitize_request(
     }
 
     let arguments = match request.operation {
-        Operation::ChannelMemory => {
+        Operation::ChannelMemory | Operation::ChannelTriples => {
             let arguments: EmptyArguments = parse_arguments(request.arguments)?;
             serde_json::to_value(arguments)
         }
@@ -513,6 +516,7 @@ mod tests {
         let requester = requester();
         for (operation, arguments) in [
             ("channel_memory", serde_json::json!({})),
+            ("channel_triples", serde_json::json!({})),
             ("trust_network", serde_json::json!({})),
             (
                 "reputation_summary",

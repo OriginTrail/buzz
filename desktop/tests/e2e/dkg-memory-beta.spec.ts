@@ -19,6 +19,7 @@ async function advertiseDkgMemory(page: import("@playwright/test").Page) {
           profiles: ["dkg-memory@1", "dkg-trust@1"],
           query_operations: [
             "channel_memory",
+            "channel_triples",
             "semantic_query",
             "trust_network",
             "reputation_summary",
@@ -49,6 +50,7 @@ test("channel memory exposes graph and authenticated search without named subgra
           profiles: ["dkg-memory@1", "dkg-trust@1"],
           query_operations: [
             "channel_memory",
+            "channel_triples",
             "semantic_query",
             "trust_network",
             "reputation_summary",
@@ -91,6 +93,41 @@ test("channel memory exposes graph and authenticated search without named subgra
           { pubkey: "deadbeef".repeat(8), events: 4, latest: 1_786_363_200 },
         ],
         subgraphs: [],
+      };
+    } else if (request.operation === "channel_triples") {
+      result = {
+        limit: 10_000,
+        truncated: false,
+        triples: [
+          {
+            subject: "urn:decision:query-proxy",
+            predicate: "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+            object: "http://dkg.io/ontology/decisions/Decision",
+            layer: "SWM",
+            agent: "fizz",
+          },
+          {
+            subject: "urn:decision:query-proxy",
+            predicate: "http://schema.org/name",
+            object: '"Use an authenticated relay query proxy"',
+            layer: "SWM",
+            agent: "fizz",
+          },
+          {
+            subject: "urn:decision:query-proxy",
+            predicate: "http://dkg.io/ontology/decisions/affects",
+            object: "urn:component:memory-panel",
+            layer: "SWM",
+            agent: "fizz",
+          },
+          {
+            subject: "urn:component:memory-panel",
+            predicate: "http://schema.org/name",
+            object: '"Buzz memory panel"',
+            layer: "SWM",
+            agent: "fizz",
+          },
+        ],
       };
     } else if (request.operation === "semantic_query") {
       if (request.arguments.sparql?.includes('"query"')) {
