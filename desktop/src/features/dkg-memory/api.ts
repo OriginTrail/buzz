@@ -68,6 +68,7 @@ export interface TrailEntry {
   at: number | null;
   decision: string | null;
   decisionName: string | null;
+  layer?: "WM" | "SWM" | "VM" | null;
 }
 
 export interface SoftwareContributor {
@@ -623,6 +624,31 @@ export interface EvidenceEnvelope {
   relations?: { from: string; rel: string }[];
   receiptUal?: string | null;
   replay?: { cg: string; graph: string | null; sparqlEndpoint: string };
+}
+
+/**
+ * Evidence envelopes for the all-decisions lens, aligned by index with the
+ * input. Bounded fan-out: beyond the cap (and on individual failures) the
+ * entry is null and the decision renders as a bare card — enrichment is
+ * additive, never a gate on seeing the timeline.
+ */
+export const MAX_DECISION_ENVELOPES = 32;
+
+export async function fetchDecisionsEvidence(
+  channelId: string,
+  cg: string | null,
+  decisions: DecisionEntry[],
+): Promise<(EvidenceEnvelope | null)[]> {
+  const settled = await Promise.allSettled(
+    decisions
+      .slice(0, MAX_DECISION_ENVELOPES)
+      .map((decision) => fetchEvidence(channelId, cg, decision.uri)),
+  );
+  return decisions.map((_, index) => {
+    const result = settled[index];
+    if (result?.status !== "fulfilled") return null;
+    return result.value.found === false ? null : result.value;
+  });
 }
 
 export async function fetchEvidence(

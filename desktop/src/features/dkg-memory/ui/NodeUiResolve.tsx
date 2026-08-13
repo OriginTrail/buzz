@@ -4,6 +4,7 @@
 // provider today, your own Edge node when you want independent verification).
 import { useState } from "react";
 import { explorerSource, nodeUiDeepLink } from "../api";
+import { openExternal } from "./openExternal";
 
 const EDGE_NODE_GUIDE = "https://github.com/OriginTrail/buzz-dkg-integration";
 
@@ -22,12 +23,15 @@ export function NodeUiResolve({
   const lc = layer ? (layer.toLowerCase() as "wm" | "swm" | "vm") : undefined;
 
   if (source === "local") {
+    const href = nodeUiDeepLink(cg, entity ? { entity } : { layer: lc });
     return (
       <a
-        href={nodeUiDeepLink(cg, entity ? { entity } : { layer: lc })}
+        href={href}
+        onClick={(event) => openExternal(event, href)}
         target="_blank"
         rel="noreferrer"
         className="inline-flex items-center gap-1 text-2xs text-primary hover:underline"
+        data-testid="dkg-node-ui-link"
       >
         Resolve in your node UI ↗
       </a>
@@ -57,6 +61,7 @@ export function NodeUiResolve({
           .{" "}
           <a
             href={EDGE_NODE_GUIDE}
+            onClick={(event) => openExternal(event, EDGE_NODE_GUIDE)}
             target="_blank"
             rel="noreferrer"
             className="text-primary hover:underline"

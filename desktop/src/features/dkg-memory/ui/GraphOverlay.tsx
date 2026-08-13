@@ -3,19 +3,34 @@
 // reusable canvas the Knowledge section mounts later). Read-only: node click
 // selects and focuses the evidence rail; the graph orients, it never
 // navigates away. Labels are inert text; no editing, no action execution.
+//
+// Four lenses share this overlay: the whole channel, a named subgraph, the
+// all-decisions timeline, and one contributor's trail. The latter two are
+// client-assembled (lensGraphs) from operations every deployment already
+// serves, so Traces AND Graph work even while capture is flat and the
+// gateway advertises no named subgraphs.
+import { Hexagon, ListTree } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import type { DecisionEntry, GraphNode } from "../api";
+import type { DecisionEntry, GraphEdge, GraphNode } from "../api";
 import { explorerSource } from "../api";
-import { useSubgraphGraph } from "../hooks";
+import {
+  useContributorGraph,
+  useDecisionsGraph,
+  useEvidence,
+  useSubgraphGraph,
+} from "../hooks";
+import { lensLayerCounts } from "../lensGraphs";
 import { TopologyView } from "../topology/TopologyView";
 import type { TopologyTarget } from "../topology/client";
 import { GraphCanvas, type GraphSelection } from "./GraphCanvas";
+import { LensTopology } from "./LensTopology";
 import { NodeUiResolve } from "./NodeUiResolve";
 
 export type GraphOverlayTarget =
   | TopologyTarget
-  | { kind: "channel-decisions"; decisions: DecisionEntry[] };
+  | { kind: "channel-decisions"; decisions: DecisionEntry[] }
+  | { kind: "contributor"; pubkey: string; name: string };
 
 function decisionsToNodes(decisions: DecisionEntry[]): GraphNode[] {
   return decisions.map((decision) => ({
@@ -26,6 +41,39 @@ function decisionsToNodes(decisions: DecisionEntry[]): GraphNode[] {
       ? Math.floor(new Date(decision.at).getTime() / 1_000) || null
       : null,
   }));
+}
+
+/** One-hop selection out of a lens graph — the shared rail contract. */
+function selectionFor(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  uri: string,
+  label?: string,
+): GraphSelection {
+  const known = nodes.find((node) => node.id === uri);
+  if (!known) {
+    return {
+      node: { id: uri, kind: "claim", label: label ?? uri, at: null },
+      neighbors: [],
+      evidenceUri: uri,
+    };
+  }
+  const neighbors: GraphSelection["neighbors"] = [];
+  const seen = new Set<string>();
+  for (const edge of edges) {
+    if (edge.from !== uri && edge.to !== uri) continue;
+    const other = nodes.find(
+      (node) => node.id === (edge.from === uri ? edge.to : edge.from),
+    );
+    if (!other || seen.has(`${edge.rel}|${other.id}`)) continue;
+    seen.add(`${edge.rel}|${other.id}`);
+    neighbors.push({ rel: edge.rel, node: other });
+  }
+  return {
+    node: known,
+    neighbors,
+    evidenceUri: neighbors.length === 0 ? known.id : undefined,
+  };
 }
 
 const LAYER_META = {
@@ -62,7 +110,24 @@ export function GraphOverlay({
     );
   }
   if (target.kind === "channel-decisions") {
-    return <DecisionsGraphOverlay cg={cg} target={target} onClose={onClose} />;
+    return (
+      <DecisionsGraphOverlay
+        channelId={channelId}
+        cg={cg}
+        target={target}
+        onClose={onClose}
+      />
+    );
+  }
+  if (target.kind === "contributor") {
+    return (
+      <ContributorGraphOverlay
+        channelId={channelId}
+        cg={cg}
+        target={target}
+        onClose={onClose}
+      />
+    );
   }
   return (
     <SubgraphGraphOverlay
@@ -76,6 +141,8 @@ export function GraphOverlay({
 
 type OverlayShellProps = {
   aside: ReactNode;
+  /** Rendered dead-center in the header — the view toggle's prominent home. */
+  center?: ReactNode;
   children: ReactNode;
   headerControls?: ReactNode;
   onClose: () => void;
@@ -84,6 +151,7 @@ type OverlayShellProps = {
 
 function GraphOverlayShell({
   aside,
+  center,
   children,
   headerControls,
   onClose,
@@ -101,11 +169,16 @@ function GraphOverlayShell({
       className="fixed inset-0 z-[100] flex flex-col bg-background"
       data-testid="dkg-graph-overlay"
     >
-      <header className="flex items-center gap-3 border-b border-border py-2 pl-20 pr-4">
+      <header className="relative flex items-center gap-3 border-b border-border py-2 pl-20 pr-4">
         <h2 className="text-sm font-semibold">{title}</h2>
         <ProviderBadge />
-        {headerControls}
+        {center && (
+          <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+            {center}
+          </div>
+        )}
         <div className="flex-1" />
+        {headerControls}
         <button
           type="button"
           onClick={onClose}
@@ -162,6 +235,10 @@ function LayerCountsLegend({
   );
 }
 
+// The lens's two ways of seeing — a first-class, centered segmented control
+// rather than a corner utility. The active segment carries the primary color
+// with a soft glow; the switch itself sits on a subtle gradient ring so it
+// reads as THE control of the overlay.
 function GraphModeToggle({
   mode,
   onChange,
@@ -169,22 +246,35 @@ function GraphModeToggle({
   mode: "spine" | "topology";
   onChange: (mode: "spine" | "topology") => void;
 }) {
+  const segment = (active: boolean) =>
+    `flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all duration-200 ${
+      active
+        ? "bg-primary text-primary-foreground shadow-md shadow-primary/40"
+        : "text-muted-foreground hover:bg-primary/10 hover:text-foreground"
+    }`;
   return (
-    <div className="ml-auto flex rounded-md border border-border text-xs">
+    <div
+      className="flex items-center gap-0.5 rounded-full border border-primary/30 bg-gradient-to-b from-primary/15 via-primary/5 to-transparent p-1 shadow-lg shadow-primary/10 backdrop-blur-sm"
+      data-testid="dkg-view-toggle"
+    >
       <button
         type="button"
         onClick={() => onChange("spine")}
-        className={`rounded-l-md px-2 py-1 ${mode === "spine" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+        className={segment(mode === "spine")}
+        aria-pressed={mode === "spine"}
       >
+        <ListTree className="h-3.5 w-3.5" />
         Traces
       </button>
       <button
         type="button"
         onClick={() => onChange("topology")}
         data-testid="dkg-topology-toggle"
-        className={`rounded-r-md px-2 py-1 ${mode === "topology" ? "bg-muted font-medium" : "text-muted-foreground hover:bg-muted/50"}`}
+        className={segment(mode === "topology")}
+        aria-pressed={mode === "topology"}
       >
-        ⬡ Graph
+        <Hexagon className="h-3.5 w-3.5" />
+        Graph
       </button>
     </div>
   );
@@ -209,7 +299,7 @@ function ChannelGraphOverlay({
       title="Channel knowledge graph"
       aside={
         selection ? (
-          <EvidenceRail selection={selection} cg={cg} />
+          <EvidenceRail selection={selection} channelId={channelId} cg={cg} />
         ) : (
           <TopologyHelp />
         )
@@ -219,28 +309,57 @@ function ChannelGraphOverlay({
         channelId={channelId}
         cg={cg}
         target={target}
-        onSelectUri={(uri, label) =>
+        onSelectUri={(uri, label, neighbors) => {
+          const resolvedNeighbors = (neighbors ?? []).map((neighbor) => ({
+            rel: neighbor.rel,
+            node: {
+              id: neighbor.uri,
+              kind: "claim" as const,
+              label: neighbor.label,
+              at: null,
+            },
+          }));
           setSelection({
             node: { id: uri, kind: "claim", label: label ?? uri, at: null },
-            neighbors: [],
-          })
-        }
+            neighbors: resolvedNeighbors,
+            evidenceUri: resolvedNeighbors.length === 0 ? uri : undefined,
+          });
+        }}
       />
     </GraphOverlayShell>
   );
 }
 
 function DecisionsGraphOverlay({
+  channelId,
   cg,
   target,
   onClose,
 }: {
+  channelId: string;
   cg: string | null;
   target: Extract<GraphOverlayTarget, { kind: "channel-decisions" }>;
   onClose: () => void;
 }) {
-  const nodes = useMemo(() => decisionsToNodes(target.decisions), [target]);
+  const enriched = useDecisionsGraph(channelId, cg, target.decisions);
   const [selection, setSelection] = useState<GraphSelection | null>(null);
+  const [mode, setMode] = useState<"spine" | "topology">("spine");
+
+  // The timeline never waits on enrichment: bare decision cards render
+  // immediately and evidence rows appear when the envelopes resolve.
+  const graph = useMemo(
+    () =>
+      enriched.data ?? {
+        nodes: decisionsToNodes(target.decisions),
+        edges: [] as GraphEdge[],
+      },
+    [enriched.data, target],
+  );
+  const decisionCount = graph.nodes.filter(
+    (node) => node.kind === "decision",
+  ).length;
+  const evidenceCount = graph.nodes.length - decisionCount;
+  const layerCounts = useMemo(() => lensLayerCounts(graph.nodes), [graph]);
 
   return (
     <GraphOverlayShell
@@ -249,27 +368,116 @@ function DecisionsGraphOverlay({
         <>
           All decisions
           <span className="ml-2 font-normal text-muted-foreground">
-            {nodes.length} decisions · 0 evidence
+            {decisionCount} decisions · {evidenceCount} evidence
+            {enriched.isLoading ? " · resolving evidence…" : ""}
           </span>
         </>
       }
-      headerControls={<LayerCountsLegend counts={{ WM: 0, SWM: 0, VM: 0 }} />}
+      headerControls={<LayerCountsLegend counts={layerCounts} />}
+      center={<GraphModeToggle mode={mode} onChange={setMode} />}
       aside={
         selection ? (
-          <EvidenceRail selection={selection} cg={cg} />
+          <EvidenceRail selection={selection} channelId={channelId} cg={cg} />
         ) : (
           <p className="text-xs text-muted-foreground">
-            Select a decision to inspect its available provenance here.
+            Select a decision to inspect its provenance here — the messages it
+            was derived from, who authored them, and when.
           </p>
         )
       }
     >
-      <GraphCanvas
-        nodes={nodes}
-        edges={[]}
-        selectedId={selection?.node.id ?? null}
-        onSelect={setSelection}
-      />
+      {mode === "spine" ? (
+        <GraphCanvas
+          nodes={graph.nodes}
+          edges={graph.edges}
+          selectedId={selection?.node.id ?? null}
+          onSelect={setSelection}
+        />
+      ) : (
+        <LensTopology
+          graph={graph}
+          onSelectUri={(uri, label) =>
+            setSelection(selectionFor(graph.nodes, graph.edges, uri, label))
+          }
+        />
+      )}
+    </GraphOverlayShell>
+  );
+}
+
+function ContributorGraphOverlay({
+  channelId,
+  cg,
+  target,
+  onClose,
+}: {
+  channelId: string;
+  cg: string | null;
+  target: Extract<GraphOverlayTarget, { kind: "contributor" }>;
+  onClose: () => void;
+}) {
+  const graph = useContributorGraph(channelId, cg, target.pubkey);
+  const [selection, setSelection] = useState<GraphSelection | null>(null);
+  const [mode, setMode] = useState<"spine" | "topology">("spine");
+  const data = graph.data;
+  const nodes = data?.nodes ?? [];
+  const edges = data?.edges ?? [];
+  const decisionCount = nodes.filter((node) => node.kind === "decision").length;
+  const evidenceCount = nodes.length - decisionCount;
+  const layerCounts = useMemo(() => lensLayerCounts(nodes), [nodes]);
+
+  return (
+    <GraphOverlayShell
+      onClose={onClose}
+      title={
+        <>
+          {target.name}
+          <span className="ml-2 font-normal text-muted-foreground">
+            {decisionCount} decisions · {evidenceCount} evidence
+          </span>
+        </>
+      }
+      headerControls={<LayerCountsLegend counts={layerCounts} />}
+      center={<GraphModeToggle mode={mode} onChange={setMode} />}
+      aside={
+        selection ? (
+          <EvidenceRail selection={selection} channelId={channelId} cg={cg} />
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Everything this participant fed into the channel's memory: cards are
+            the decisions their contributions reached, ⊕ rows the signed
+            messages behind them. Select any row to inspect its trail.
+          </p>
+        )
+      }
+    >
+      {graph.isLoading ? (
+        <div className="p-6 text-sm text-muted-foreground">
+          Reading this contributor's trail through the DKG provider…
+        </div>
+      ) : null}
+      {graph.isError ? (
+        <div className="p-6 text-sm text-muted-foreground">
+          Could not read this contributor's trail through the available DKG
+          provider.
+        </div>
+      ) : null}
+      {data && mode === "spine" ? (
+        <GraphCanvas
+          nodes={nodes}
+          edges={edges}
+          selectedId={selection?.node.id ?? null}
+          onSelect={setSelection}
+        />
+      ) : null}
+      {data && mode === "topology" ? (
+        <LensTopology
+          graph={data}
+          onSelectUri={(uri, label) =>
+            setSelection(selectionFor(nodes, edges, uri, label))
+          }
+        />
+      ) : null}
     </GraphOverlayShell>
   );
 }
@@ -293,41 +501,11 @@ function SubgraphGraphOverlay({
   const edges = useMemo(() => data?.edges ?? [], [data]);
   const decisionCount = nodes.filter((node) => node.kind === "decision").length;
   const evidenceCount = nodes.length - decisionCount;
-  const layerCounts = useMemo(() => {
-    const counts = { WM: 0, SWM: 0, VM: 0 };
-    for (const node of nodes) if (node.layer) counts[node.layer] += 1;
-    return counts;
-  }, [nodes]);
+  const layerCounts = useMemo(() => lensLayerCounts(nodes), [nodes]);
 
   const selectTopologyUri = (uri: string, label?: string) => {
-    const known = nodes.find((node) => node.id === uri);
-    if (!known) {
-      setSelection({
-        node: { id: uri, kind: "claim", label: label ?? uri, at: null },
-        neighbors: [],
-      });
-      return;
-    }
-    const neighbors: GraphSelection["neighbors"] = [];
-    const seen = new Set<string>();
-    for (const edge of edges) {
-      if (edge.from !== uri && edge.to !== uri) continue;
-      const other = nodes.find(
-        (node) => node.id === (edge.from === uri ? edge.to : edge.from),
-      );
-      if (!other || seen.has(`${edge.rel}|${other.id}`)) continue;
-      seen.add(`${edge.rel}|${other.id}`);
-      neighbors.push({ rel: edge.rel, node: other });
-    }
-    setSelection({ node: known, neighbors });
+    setSelection(selectionFor(nodes, edges, uri, label));
   };
-
-  const controls = (
-    <>
-      <LayerCountsLegend counts={layerCounts} />
-      <GraphModeToggle mode={mode} onChange={setMode} />
-    </>
-  );
 
   return (
     <GraphOverlayShell
@@ -340,10 +518,11 @@ function SubgraphGraphOverlay({
           </span>
         </>
       }
-      headerControls={controls}
+      headerControls={<LayerCountsLegend counts={layerCounts} />}
+      center={<GraphModeToggle mode={mode} onChange={setMode} />}
       aside={
         selection ? (
-          <EvidenceRail selection={selection} cg={cg} />
+          <EvidenceRail selection={selection} channelId={channelId} cg={cg} />
         ) : mode === "spine" ? (
           <p className="text-xs text-muted-foreground">
             Select a decision or evidence row to inspect its trail here. Cards
@@ -404,12 +583,19 @@ function TopologyHelp() {
 
 function EvidenceRail({
   selection,
+  channelId,
   cg,
 }: {
   selection: GraphSelection;
+  channelId: string;
   cg: string | null;
 }) {
-  const { node, neighbors } = selection;
+  const { node, neighbors, evidenceUri } = selection;
+  // Evidence resolution is chosen by the overlay/selection owner. The rail
+  // renders that policy but never infers network work from incidental shape.
+  const envelope = useEvidence(channelId, cg, evidenceUri ?? null);
+  const sources =
+    envelope.data?.found === false ? [] : (envelope.data?.sources ?? []);
   return (
     <div className="space-y-3">
       <div>
@@ -469,6 +655,38 @@ function EvidenceRail({
             ))}
           </div>
         </section>
+      )}
+      {evidenceUri && envelope.isLoading && (
+        <p className="text-2xs text-muted-foreground">Resolving evidence…</p>
+      )}
+      {evidenceUri && envelope.isSuccess && sources.length > 0 && (
+        <section data-testid="dkg-entity-evidence">
+          <h4 className="mb-1 text-2xs font-medium uppercase tracking-wide text-muted-foreground">
+            Captured evidence
+          </h4>
+          <div className="space-y-1.5">
+            {sources.map((source) => (
+              <div
+                key={source.id}
+                className="rounded-md border border-border bg-muted/20 px-2 py-1"
+              >
+                <p className="text-xs leading-snug">
+                  {(source.span ?? source.id).slice(0, 160)}
+                </p>
+                {source.at && (
+                  <p className="text-2xs text-muted-foreground">
+                    {new Date(source.at * 1000).toLocaleString()}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+      {evidenceUri && envelope.isSuccess && sources.length === 0 && (
+        <p className="text-2xs text-muted-foreground">
+          No captured evidence resolvable for this entity yet.
+        </p>
       )}
       <p className="break-all font-mono text-3xs text-muted-foreground/70">
         {node.id}

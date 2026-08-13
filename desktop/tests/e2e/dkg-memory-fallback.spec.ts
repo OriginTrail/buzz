@@ -53,7 +53,39 @@ async function openMemoryPanel(
   return panel;
 }
 
-test("flat capture: All-decisions lens opens the Traces timeline", async ({
+async function expectPaintedGraphCanvas(
+  overlay: import("@playwright/test").Locator,
+) {
+  const canvas = overlay.locator("canvas").first();
+  await expect(canvas).toBeVisible({ timeout: 20_000 });
+  await expect
+    .poll(
+      () =>
+        canvas.evaluate((node) => {
+          const element = node as HTMLCanvasElement;
+          const context = element.getContext("2d", {
+            willReadFrequently: true,
+          });
+          if (!context || element.width === 0 || element.height === 0) return 0;
+          const pixels = context.getImageData(
+            0,
+            0,
+            element.width,
+            element.height,
+          ).data;
+          let painted = 0;
+          for (let index = 3; index < pixels.length; index += 4) {
+            if (pixels[index] > 0) painted += 1;
+            if (painted >= 10) break;
+          }
+          return painted;
+        }),
+      { timeout: 20_000 },
+    )
+    .toBeGreaterThanOrEqual(10);
+}
+
+test("flat capture: All-decisions lens resolves evidence into Traces and Graph", async ({
   page,
 }) => {
   const subgraphRequests: string[] = [];
@@ -70,6 +102,37 @@ test("flat capture: All-decisions lens opens the Traces timeline", async ({
     if (url.includes("/api/channel-memory")) {
       return route.fulfill({ json: FLAT_MEMORY });
     }
+    if (url.includes("/api/evidence")) {
+      const uri = new URL(url).searchParams.get("uri") ?? "";
+      if (uri !== FLAT_MEMORY.decisions[0].uri) {
+        return route.fulfill({ json: { gate: "ok", found: false } });
+      }
+      return route.fulfill({
+        json: {
+          gate: "ok",
+          found: true,
+          claimId: uri,
+          name: FLAT_MEMORY.decisions[0].name,
+          memoryLayer: "SWM",
+          attribution: ["c9f4f94b"],
+          sources: [
+            {
+              id: "urn:nostr:event:e1",
+              span: "which auth methods should the service support?",
+              author: "c9f4f94b",
+              at: 1_786_363_100,
+            },
+            {
+              id: "urn:nostr:event:e2",
+              span: "NIP-42 plus NIP-98 covers both transports.",
+              author: "c9f4f94b",
+              at: 1_786_363_150,
+            },
+          ],
+          relations: [],
+        },
+      });
+    }
     return route.fulfill({ json: { gate: "ok" } });
   });
   const panel = await openMemoryPanel(page);
@@ -80,21 +143,99 @@ test("flat capture: All-decisions lens opens the Traces timeline", async ({
 
   const overlay = page.getByTestId("dkg-graph-overlay");
   await expect(overlay.getByText("All decisions")).toBeVisible();
-  await expect(overlay.getByText("3 decisions · 0 evidence")).toBeVisible();
-  await expect(overlay.getByTestId("traces-card")).toHaveCount(3, {
+  // Envelope fan-out enriches the bare decision list: two ⊕ sources land.
+  await expect(overlay.getByText("3 decisions · 2 evidence")).toBeVisible({
     timeout: 15_000,
   });
+  await expect(overlay.getByTestId("traces-card")).toHaveCount(3);
   await expect(
     overlay.getByRole("region", { name: "Decision traces timeline" }),
   ).toBeVisible();
+  const enriched = overlay
+    .getByTestId("traces-card")
+    .filter({ hasText: "adopt NIP-42 for WebSockets" })
+    .first();
+  await expect(enriched).toBeVisible();
+  await expect(enriched.getByText("⊕ 2")).toBeVisible();
+  // Selecting the decision surfaces its provenance in the evidence rail.
+  await enriched.getByText(/adopt NIP-42 for WebSockets/).click();
+  const rail = overlay.locator("aside");
+  await expect(rail.getByText("Evidence trail")).toBeVisible();
   await expect(
-    overlay
-      .getByTestId("traces-card")
-      .filter({ hasText: "adopt NIP-42 for WebSockets" })
-      .first(),
+    rail.getByText("NIP-42 plus NIP-98 covers both transports."),
   ).toBeVisible();
-  await expect(overlay.getByTestId("dkg-topology-toggle")).toHaveCount(0);
+  // The lens has a real Graph mode now, still with zero subgraph queries.
+  await overlay.getByTestId("dkg-topology-toggle").click();
+  await expect(
+    overlay.getByText(/5 entities · 2 relationships/i),
+  ).toBeVisible();
+  await expectPaintedGraphCanvas(overlay);
   expect(subgraphRequests).toEqual([]);
+  await waitForAnimations(page);
+});
+
+test("contributor chip opens that participant's Traces lens", async ({
+  page,
+}) => {
+  await page.addInitScript((cg) => {
+    window.localStorage.setItem("dkg-memory-cg-override", cg);
+  }, CG);
+  const pubkey = "c9f4f94b87273745cc34b9d8b15847b27afb90eb9bb7c8a4363703821a0";
+  await page.route("http://127.0.0.1:9295/**", (route) => {
+    const url = route.request().url();
+    if (url.includes("/api/channel-memory")) {
+      return route.fulfill({
+        json: {
+          ...FLAT_MEMORY,
+          contributors: [{ pubkey, events: 3, latest: 1_786_363_200 }],
+        },
+      });
+    }
+    if (url.includes("/api/contributor-trail")) {
+      return route.fulfill({
+        json: [
+          {
+            event: "urn:nostr:event:t1",
+            content: "We should adopt NIP-42 for the WebSocket path.",
+            at: 1_786_363_000,
+            decision: FLAT_MEMORY.decisions[0].uri,
+            decisionName: FLAT_MEMORY.decisions[0].name,
+            layer: "SWM",
+          },
+          {
+            event: "urn:nostr:event:t2",
+            content: "Standalone remark, not yet feeding a decision.",
+            at: 1_786_363_050,
+            decision: null,
+            decisionName: null,
+            layer: "SWM",
+          },
+        ],
+      });
+    }
+    return route.fulfill({ json: { gate: "ok" } });
+  });
+  const panel = await openMemoryPanel(page);
+
+  const chip = panel.getByTestId(`dkg-contributor-${pubkey}`);
+  await expect(chip).toBeVisible();
+  await chip.click();
+
+  const overlay = page.getByTestId("dkg-graph-overlay");
+  // 1 linked decision; evidence = its source event + the unlinked remark.
+  await expect(overlay.getByText("1 decisions · 2 evidence")).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(overlay.getByTestId("traces-card")).toHaveCount(1);
+  await expect(overlay.getByText("⊕ 1")).toBeVisible();
+  await expect(
+    overlay.getByText("evidence not yet feeding a decision (1)"),
+  ).toBeVisible();
+  await overlay.getByTestId("dkg-topology-toggle").click();
+  await expect(
+    overlay.getByText(/3 entities · 1 relationships/i),
+  ).toBeVisible();
+  await expectPaintedGraphCanvas(overlay);
   await waitForAnimations(page);
 });
 
@@ -175,7 +316,8 @@ test("named subgraph lens queries the provider and keeps Graph available", async
   });
 
   const panel = await openMemoryPanel(page, 1);
-  await expect(panel.getByTestId("dkg-subgraph-all-decisions")).toHaveCount(0);
+  // The decisions timeline stays reachable even when named topics exist.
+  await expect(panel.getByTestId("dkg-subgraph-all-decisions")).toBeVisible();
   await panel.getByTestId("dkg-subgraph-engineering").click();
 
   const overlay = page.getByTestId("dkg-graph-overlay");
@@ -199,35 +341,7 @@ test("named subgraph lens queries the provider and keeps Graph available", async
   await expect(
     overlay.getByText(/2 connected entities · 1 relationships/i),
   ).toBeVisible({ timeout: 15_000 });
-  const topologyCanvas = overlay.locator("canvas").first();
-  await expect(topologyCanvas).toBeVisible({
-    timeout: 20_000,
-  });
-  await expect
-    .poll(
-      () =>
-        topologyCanvas.evaluate((node) => {
-          const canvas = node as HTMLCanvasElement;
-          const context = canvas.getContext("2d", {
-            willReadFrequently: true,
-          });
-          if (!context || canvas.width === 0 || canvas.height === 0) return 0;
-          const pixels = context.getImageData(
-            0,
-            0,
-            canvas.width,
-            canvas.height,
-          ).data;
-          let painted = 0;
-          for (let index = 3; index < pixels.length; index += 4) {
-            if (pixels[index] > 0) painted += 1;
-            if (painted >= 10) break;
-          }
-          return painted;
-        }),
-      { timeout: 20_000 },
-    )
-    .toBeGreaterThanOrEqual(10);
+  await expectPaintedGraphCanvas(overlay);
   expect(tripleRequests).toHaveLength(1);
   expect(new URL(tripleRequests[0]).searchParams.get("name")).toBe(
     "engineering",
