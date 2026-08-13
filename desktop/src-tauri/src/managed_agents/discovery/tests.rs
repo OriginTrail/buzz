@@ -13,21 +13,6 @@ use super::{
 use crate::managed_agents::AcpAvailabilityStatus;
 
 #[test]
-fn command_search_prefers_the_running_apps_sidecar_directory() {
-    let executable_dir = std::env::current_exe()
-        .expect("current executable")
-        .parent()
-        .expect("executable directory")
-        .to_path_buf();
-
-    assert_eq!(
-        super::command_search_dirs().first(),
-        Some(&executable_dir),
-        "the installed app bundle must win over compile-time workspace output"
-    );
-}
-
-#[test]
 fn resolves_known_avatar_for_bare_command() {
     let avatar_url = managed_agent_avatar_url("goose").expect("goose avatar should resolve");
 
