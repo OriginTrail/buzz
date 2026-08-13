@@ -14,7 +14,7 @@ use axum::{
 };
 use serde_json::json;
 use tower::ServiceExt;
-use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::cors::{AllowHeaders, AllowOrigin, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::services::ServeDir;
 use tower_http::trace::{HttpMakeClassifier, TraceLayer};
@@ -443,7 +443,10 @@ async fn mesh_status_handler(State(state): State<Arc<AppState>>) -> impl IntoRes
 /// Build a CORS layer from the configured origins list.
 fn build_cors_layer(cors_origins: &[String]) -> CorsLayer {
     if cors_origins.is_empty() {
-        return CorsLayer::permissive();
+        return CorsLayer::new()
+            .allow_origin(tower_http::cors::Any)
+            .allow_methods(tower_http::cors::Any)
+            .allow_headers(AllowHeaders::mirror_request());
     }
 
     let origins: Vec<axum::http::HeaderValue> = cors_origins
@@ -463,7 +466,10 @@ fn build_cors_layer(cors_origins: &[String]) -> CorsLayer {
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(origins))
         .allow_methods(tower_http::cors::Any)
-        .allow_headers(tower_http::cors::Any)
+        // `Authorization` is a CORS non-wildcard request header. WebKit rejects
+        // `Access-Control-Allow-Headers: *` for NIP-98 requests, so echo the
+        // browser's requested header list explicitly.
+        .allow_headers(AllowHeaders::mirror_request())
 }
 
 #[cfg(test)]
@@ -509,6 +515,39 @@ mod tests {
         assert!(should_serve_spa("/", true));
         assert!(should_serve_spa("/repos/example", true));
         assert!(!should_serve_spa("/arbitrary", true));
+    }
+
+    #[tokio::test]
+    async fn cors_preflight_explicitly_allows_nip98_authorization() {
+        let app = Router::new()
+            .route("/api/dkg/query", axum::routing::post(|| async {}))
+            .layer(build_cors_layer(&[]));
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("OPTIONS")
+                    .uri("/api/dkg/query")
+                    .header(axum::http::header::ORIGIN, "tauri://localhost")
+                    .header(axum::http::header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+                    .header(
+                        axum::http::header::ACCESS_CONTROL_REQUEST_HEADERS,
+                        "authorization,content-type",
+                    )
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::ACCESS_CONTROL_ALLOW_HEADERS)
+                .unwrap(),
+            "authorization,content-type"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
