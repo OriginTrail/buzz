@@ -356,3 +356,90 @@ test("named subgraph lens queries the provider and keeps Graph available", async
     "engineering",
   );
 });
+
+test("entity accounting: bounded sub-graph counts report typed assignments", async ({
+  page,
+}) => {
+  const pubkey = "c9f4f94b87273745cc34b9d8b15847b27afb90eb9bb7c8a4363703821a0";
+  await page.addInitScript((cg) => {
+    window.localStorage.setItem("dkg-memory-cg-override", cg);
+  }, CG);
+  await page.route("http://127.0.0.1:9295/**", (route) => {
+    const url = route.request().url();
+    if (url.includes("/api/channel-memory")) {
+      return route.fulfill({
+        json: {
+          ...FLAT_MEMORY,
+          contributors: [{ pubkey, events: 99, latest: 1_786_363_200 }],
+        },
+      });
+    }
+    return route.fulfill({ json: { gate: "ok" } });
+  });
+  // Community-gateway semantic queries: answer each bounded aggregate with a
+  // fixture that reconciles exactly (13 = 3 decisions + 6 evidence + 1 agent
+  // + 3 capture runs), echoing the request's own channel/operation so the
+  // provider envelope validation passes.
+  await page.route("**/api/dkg/query", (route) => {
+    const body = route.request().postDataJSON() as {
+      channelId: string;
+      operation: string;
+      arguments?: { sparql?: string };
+    };
+    const sparql = body.arguments?.sparql ?? "";
+    const count = sparql.includes("DecisionCluster")
+      ? 3
+      : sparql.includes("nostr#Event")
+        ? 6
+        : sparql.includes("prov#Agent")
+          ? 1
+          : sparql.includes("Distillation")
+            ? 3
+            : sparql.includes("wasAttributedTo")
+              ? 6
+              : sparql.includes(
+                    "?s <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?t",
+                  )
+                ? 13
+                : 0;
+    return route.fulfill({
+      json: {
+        ok: true,
+        channelId: body.channelId,
+        operation: body.operation,
+        cg: CG,
+        result: {
+          queryType: "select",
+          scope: { type: "current_channel" },
+          layers: [
+            {
+              layer: "SWM",
+              bindings: [
+                { n: `"${count}"^^<http://www.w3.org/2001/XMLSchema#integer>` },
+              ],
+            },
+            { layer: "VM", bindings: [{ n: '"0"' }] },
+          ],
+        },
+      },
+    });
+  });
+  const panel = await openMemoryPanel(page);
+
+  // Complete kind counts are compared with the entity total without claiming
+  // the types form a partition. Zero-count kinds are omitted from the prose.
+  await expect(panel.getByTestId("dkg-entity-reconciliation")).toHaveText(
+    "Shared memory: 13 typed entities · 13 listed type assignments: 3 decisions · 6 evidence · 1 people & agents · 3 capture runs",
+    { timeout: 15_000 },
+  );
+  // SWM layer card prefers the measured entity total over the provider's
+  // SWMCount, which counts graphs rather than entities.
+  await expect(
+    panel.getByTitle("Shared: channel memory — typed entities"),
+  ).toContainText("13");
+  // The agent chip carries its sub-graph's entity count (6), not raw events (99).
+  const chip = panel.getByTestId(`dkg-contributor-${pubkey}`);
+  await expect(chip).toContainText("6");
+  await expect(chip).not.toContainText("99");
+  await waitForAnimations(page);
+});

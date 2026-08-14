@@ -7,7 +7,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/ui/tabs";
 import type { ChannelMemory } from "../api";
 import { explorerSource, nodeUiDeepLink } from "../api";
 import { shouldShowDkgWebOfTrustUi } from "../featureFlags";
-import { useProfileNames } from "../hooks";
+import { useEntityCounts, useProfileNames } from "../hooks";
+import { reconciliationLine } from "../subgraphCounts";
 import { EvidenceCard } from "./EvidenceCard";
 import { GraphOverlay, type GraphOverlayTarget } from "./GraphOverlay";
 import { openExternal } from "./openExternal";
@@ -56,6 +57,11 @@ export function MemoryOverview({
   const topicCount = (data.subgraphs ?? []).filter(
     (subgraph) => subgraph.entityCount > 0,
   ).length;
+  // Entity accounting (buzz-dkg-beta#13): typed and attributed slices are
+  // compared without assuming that the listed types form a partition.
+  const entityCounts = useEntityCounts(channelId, contributorPubkeys);
+  const swmCounts = entityCounts.data?.SWM ?? null;
+  const swmReconciliation = swmCounts ? reconciliationLine(swmCounts) : null;
   const showWebOfTrust = shouldShowDkgWebOfTrustUi(trustAvailable);
 
   return (
@@ -127,13 +133,30 @@ export function MemoryOverview({
             <div className="mb-2 grid grid-cols-3 gap-2">
               {(["WM", "SWM", "VM"] as const).map((tag) => {
                 const entries = data.layers?.[tag];
-                const count = data.layers?.[`${tag}Count`] ?? entries?.length;
+                const declaredCount = data.layers?.[`${tag}Count`];
+                const measuredTotal =
+                  tag === "WM"
+                    ? null
+                    : (entityCounts.data?.[tag]?.typedTotal ?? null);
+                // Provider *Count fields count layer graphs, not entities. Use
+                // the measured typed-entity total when available and keep the
+                // graph-count fallback explicit in the tooltip.
+                const count =
+                  measuredTotal ??
+                  declaredCount ??
+                  (entries
+                    ? entries.length === 0
+                      ? 0
+                      : `≥${entries.length}`
+                    : null);
+                const countUnit =
+                  measuredTotal !== null ? "typed entities" : "memory graphs";
                 const meta = LAYER_META[tag];
                 return (
                   <Card
                     key={tag}
                     className="p-2"
-                    title={`${meta.label}: ${meta.hint}`}
+                    title={`${meta.label}: ${meta.hint} — ${countUnit}`}
                   >
                     <div className="flex items-center gap-1.5">
                       <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
@@ -149,9 +172,18 @@ export function MemoryOverview({
               })}
             </div>
             <p className="text-2xs text-muted-foreground">
-              {sortedDecisions.length} decisions · {topicCount} named topics ·{" "}
-              {(data.contributors ?? []).length} people &amp; agents
+              {sortedDecisions.length} loaded decisions · {topicCount} named
+              topics · {(data.contributors ?? []).length} people &amp; agents
             </p>
+            {swmReconciliation && (
+              <p
+                className="mt-1 text-2xs text-muted-foreground"
+                data-testid="dkg-entity-reconciliation"
+                title="Typed entities compared with listed type assignments; entities may have unlisted or multiple types"
+              >
+                Shared memory: {swmReconciliation}
+              </p>
+            )}
           </section>
 
           {latestDecision && (
@@ -182,7 +214,7 @@ export function MemoryOverview({
                     decisions: sortedDecisions,
                   })
                 }
-                title="Open all captured decisions as a traces timeline"
+                title="Open the loaded decisions as a traces timeline"
                 data-testid="dkg-subgraph-all-decisions"
               >
                 All decisions
@@ -232,6 +264,11 @@ export function MemoryOverview({
                   const name =
                     profiles.data?.[contributor.pubkey] ??
                     shortPk(contributor.pubkey);
+                  // Prefer the measured shared-memory entity slice. When a
+                  // contributor was outside the bounded count battery, keep
+                  // the existing event count and label that fallback honestly.
+                  const agentEntities =
+                    swmCounts?.perAgent[contributor.pubkey] ?? null;
                   return (
                     <Button
                       key={contributor.pubkey}
@@ -245,12 +282,16 @@ export function MemoryOverview({
                           name,
                         })
                       }
-                      title={`Open ${name}'s decisions and evidence as Traces & Graph`}
+                      title={
+                        agentEntities !== null
+                          ? `${agentEntities} entities in ${name}'s sub-graph — open as Traces & Graph`
+                          : `${contributor.events} captured events — open ${name}'s loaded decisions and evidence as Traces & Graph`
+                      }
                       data-testid={`dkg-contributor-${contributor.pubkey}`}
                     >
                       {name}
                       <span className="text-muted-foreground">
-                        {contributor.events}
+                        {agentEntities ?? contributor.events}
                       </span>
                     </Button>
                   );

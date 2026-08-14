@@ -211,6 +211,10 @@ function ProviderBadge() {
   );
 }
 
+// Lens legends count NODES IN THIS VIEW — a different unit from the
+// dashboard's layer cards (channel-wide entity totals). The qualifier is
+// load-bearing: without it the same chip design silently means two things
+// (buzz-dkg-beta#13).
 function LayerCountsLegend({
   counts,
 }: {
@@ -222,7 +226,7 @@ function LayerCountsLegend({
         <span
           key={tag}
           className="flex items-center gap-1 rounded-md border border-border bg-muted/30 px-1.5 py-0.5 text-2xs"
-          title={LAYER_META[tag].label}
+          title={`${LAYER_META[tag].label} — nodes in this view, not the channel total`}
         >
           <span className={`h-1.5 w-1.5 rounded-full ${LAYER_META[tag].dot}`} />
           {tag}
@@ -231,6 +235,9 @@ function LayerCountsLegend({
           </span>
         </span>
       ))}
+      <span className="text-2xs italic text-muted-foreground">
+        in this view
+      </span>
     </div>
   );
 }
