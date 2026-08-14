@@ -172,8 +172,8 @@ export function MemoryOverview({
               })}
             </div>
             <p className="text-2xs text-muted-foreground">
-              {sortedDecisions.length} loaded decisions · {topicCount} named
-              topics · {(data.contributors ?? []).length} people &amp; agents
+              {sortedDecisions.length} decisions · {topicCount} named topics ·{" "}
+              {(data.contributors ?? []).length} people &amp; agents
             </p>
             {swmReconciliation && (
               <p

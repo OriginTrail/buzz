@@ -189,7 +189,8 @@ test("contributor chip opens that participant's Traces lens", async ({
   await page.addInitScript((cg) => {
     window.localStorage.setItem("dkg-memory-cg-override", cg);
   }, CG);
-  const pubkey = "c9f4f94b87273745cc34b9d8b15847b27afb90eb9bb7c8a4363703821a0";
+  const pubkey =
+    "c9f4f94b87273745cc34b9d8b15847b27afb90eb9bb7c8a4363703821a000000";
   await page.route("http://127.0.0.1:9295/**", (route) => {
     const url = route.request().url();
     if (url.includes("/api/channel-memory")) {
@@ -360,7 +361,8 @@ test("named subgraph lens queries the provider and keeps Graph available", async
 test("entity accounting: bounded sub-graph counts report typed assignments", async ({
   page,
 }) => {
-  const pubkey = "c9f4f94b87273745cc34b9d8b15847b27afb90eb9bb7c8a4363703821a0";
+  const pubkey =
+    "c9f4f94b87273745cc34b9d8b15847b27afb90eb9bb7c8a4363703821a000000";
   await page.addInitScript((cg) => {
     window.localStorage.setItem("dkg-memory-cg-override", cg);
   }, CG);
