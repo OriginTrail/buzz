@@ -4,10 +4,23 @@ import {
   deriveContextGraphId,
   fetchChannelMemory,
   fetchContributorTrail,
+  fetchDecisionsEvidence,
+  fetchDiscoveryFromReceipts,
+  fetchEntityCounts,
+  fetchEvidence,
+  fetchProfileNames,
   fetchReputationSummary,
+  fetchSubgraphGraph,
   fetchTrustNetwork,
+  type DecisionEntry,
 } from "./api";
 import { fetchDkgMemoryCapabilities } from "./capabilities";
+import {
+  buildContributorGraph,
+  buildDecisionsGraph,
+  type LensGraph,
+} from "./lensGraphs";
+import { boundedContributorPubkeys } from "./subgraphCounts";
 
 const CAPABILITY_RETRY_DELAYS_MS = [250, 1_000, 5_000] as const;
 
@@ -100,13 +113,6 @@ export function useReputationSummary(
   });
 }
 
-import {
-  fetchDiscoveryFromReceipts,
-  fetchEvidence,
-  fetchProfileNames,
-  fetchSubgraphGraph,
-} from "./api";
-
 export function useEvidence(
   channelId: string | null,
   cg: string | null | undefined,
@@ -143,14 +149,6 @@ export function useSubgraphGraph(
     staleTime: 30 * 1000,
   });
 }
-
-import type { DecisionEntry } from "./api";
-import { fetchDecisionsEvidence } from "./api";
-import {
-  buildContributorGraph,
-  buildDecisionsGraph,
-  type LensGraph,
-} from "./lensGraphs";
 
 /**
  * Enrich the all-decisions lens with evidence envelopes. Keyed by the decision
@@ -211,8 +209,6 @@ export function useDiscoveryFallback(
   });
 }
 
-import { fetchEntityCounts } from "./api";
-
 /**
  * Entity counts for the panel's sub-graph chips and layer cards (issue
  * buzz-dkg-beta#13). Keyed by the contributor set so a membership change
@@ -223,12 +219,13 @@ export function useEntityCounts(
   channelId: string | null,
   contributorPubkeys: string[],
 ) {
-  const pubkeyKey = [...contributorPubkeys].sort().join(",");
+  const boundedPubkeys = boundedContributorPubkeys(contributorPubkeys);
+  const pubkeyKey = boundedPubkeys.join(",");
   return useQuery({
     queryKey: ["dkg-memory", "entity-counts", channelId, pubkeyKey],
-    queryFn: () =>
-      fetchEntityCounts(channelId as string, [...contributorPubkeys].sort()),
+    queryFn: () => fetchEntityCounts(channelId as string, boundedPubkeys),
     enabled: Boolean(channelId),
     staleTime: 60 * 1000,
+    refetchInterval: 120 * 1000,
   });
 }

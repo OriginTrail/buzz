@@ -4,6 +4,7 @@
 // community relay's authenticated DKG provider. Receipts remain a discovery
 // and display fallback; their Context Graph id is never sent as remote
 // authorization input.
+import { collectWithConcurrency } from "@/shared/api/concurrency";
 import { relayClient } from "@/shared/api/relayClient";
 import { getRelayHttpUrl, signRelayEvent } from "@/shared/api/tauri";
 import { fetchDkgMemoryCapabilities } from "./capabilities";
@@ -12,6 +13,13 @@ import {
   memoryProposalProgress,
   normalizeMemoryProposalResponse,
 } from "./proposalState";
+import {
+  countQueries,
+  emptyLayerCounts,
+  parseCountBinding,
+  type EntityCounts,
+  type EntityKindKey,
+} from "./subgraphCounts";
 
 export {
   explorerSource,
@@ -54,7 +62,7 @@ export interface SubGraphEntry {
 export interface ChannelMemory {
   gate: MemoryGate;
   cg?: string;
-  /** Layer graph lists are display-bounded; the *Count fields are uncapped. */
+  /** Layer graph lists are display-bounded; the *Count fields count graphs. */
   layers?: Record<"WM" | "SWM" | "VM", LayerEntry[] | null> &
     Partial<Record<"WMCount" | "SWMCount" | "VMCount", number>>;
   decisions?: DecisionEntry[];
@@ -227,35 +235,32 @@ export async function fetchSemanticQuery(
   });
 }
 
-import {
-  countQueries,
-  emptyLayerCounts,
-  parseCountBinding,
-  type EntityCounts,
-  type EntityKindKey,
-} from "./subgraphCounts";
-
 /**
  * Entity counts per layer, per kind sub-graph, and per contributor sub-graph
- * (issue buzz-dkg-beta#13). Fired as a battery of budget-safe aggregates;
- * every failure degrades to null — counting never gates the panel.
+ * (issue buzz-dkg-beta#13). Queries are capped and concurrency-bounded so an
+ * open panel cannot saturate the DKG gateway. Every failure degrades to null;
+ * counting never gates the panel.
  */
 export async function fetchEntityCounts(
   channelId: string,
   contributorPubkeys: string[],
 ): Promise<EntityCounts> {
   const queries = countQueries(contributorPubkeys);
-  const settled = await Promise.allSettled(
-    queries.map((query) => fetchSemanticQuery(channelId, query.sparql)),
-  );
+  const results = await collectWithConcurrency(queries, 4, async (query) => {
+    try {
+      return await fetchSemanticQuery(channelId, query.sparql, query.view);
+    } catch {
+      return null;
+    }
+  });
   const counts: EntityCounts = {
     SWM: emptyLayerCounts(),
     VM: emptyLayerCounts(),
   };
   queries.forEach((query, index) => {
-    const result = settled[index];
-    if (result?.status !== "fulfilled") return;
-    for (const layer of result.value.layers ?? []) {
+    const result = results[index];
+    if (!result) return;
+    for (const layer of result.layers ?? []) {
       if (layer.layer !== "SWM" && layer.layer !== "VM") continue;
       const value = parseCountBinding(layer.bindings);
       if (value === null) continue;

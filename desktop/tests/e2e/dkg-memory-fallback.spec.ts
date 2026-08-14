@@ -357,7 +357,7 @@ test("named subgraph lens queries the provider and keeps Graph available", async
   );
 });
 
-test("entity accounting: chips carry sub-graph counts that reconcile to the layer total", async ({
+test("entity accounting: bounded sub-graph counts report typed assignments", async ({
   page,
 }) => {
   const pubkey = "c9f4f94b87273745cc34b9d8b15847b27afb90eb9bb7c8a4363703821a0";
@@ -426,14 +426,17 @@ test("entity accounting: chips carry sub-graph counts that reconcile to the laye
   });
   const panel = await openMemoryPanel(page);
 
-  // The reconciliation line proves the invariant: kind sub-graphs sum to the
-  // layer's entity total, with zero-count kinds omitted.
+  // Complete kind counts are compared with the entity total without claiming
+  // the types form a partition. Zero-count kinds are omitted from the prose.
   await expect(panel.getByTestId("dkg-entity-reconciliation")).toHaveText(
-    "Shared memory: 13 entities = 3 decisions · 6 evidence · 1 people & agents · 3 capture runs",
+    "Shared memory: 13 typed entities · 13 listed type assignments: 3 decisions · 6 evidence · 1 people & agents · 3 capture runs",
     { timeout: 15_000 },
   );
-  // SWM layer card prefers the gateway's uncapped count (fixture sends 3).
-  await expect(panel.getByText("3", { exact: true }).first()).toBeVisible();
+  // SWM layer card prefers the measured entity total over the provider's
+  // SWMCount, which counts graphs rather than entities.
+  await expect(
+    panel.getByTitle("Shared: channel memory — typed entities"),
+  ).toContainText("13");
   // The agent chip carries its sub-graph's entity count (6), not raw events (99).
   const chip = panel.getByTestId(`dkg-contributor-${pubkey}`);
   await expect(chip).toContainText("6");
