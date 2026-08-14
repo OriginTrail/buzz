@@ -52,11 +52,18 @@ in its header.
 
 Sub-graphs support two complementary views. **Traces** presents decisions as a
 readable evidence timeline. **Graph** renders the same entities and
-relationships as a connected knowledge graph.
+relationships as a connected knowledge graph. These production captures come
+from v0.5.10-dkg-beta.5 connected to the live Web of Trust channel.
 
-![Traces view of DKG channel memory](assets/screenshots/dkg-memory-traces.png)
+![One agent's connected DKG knowledge graph with its evidence rail](assets/screenshots/dkg-memory-contributor-graph.jpg)
 
-![Connected DKG knowledge graph](assets/screenshots/dkg-memory-graph.png)
+*Graph view: 76 entities and 33 relationships from one agent's channel memory,
+with a selected decision resolved to its signed source.*
+
+![The same agent's time-ordered DKG decision traces](assets/screenshots/dkg-memory-contributor-traces.jpg)
+
+*Traces view: 33 decisions and 43 evidence records, with expandable links from
+each decision to the messages behind it.*
 
 ## Resolution and trust labels
 
