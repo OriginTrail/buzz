@@ -210,3 +210,25 @@ export function useDiscoveryFallback(
     staleTime: 60 * 1000,
   });
 }
+
+import { fetchEntityCounts } from "./api";
+
+/**
+ * Entity counts for the panel's sub-graph chips and layer cards (issue
+ * buzz-dkg-beta#13). Keyed by the contributor set so a membership change
+ * refreshes the per-agent battery; cached because the counts only move when
+ * something is captured.
+ */
+export function useEntityCounts(
+  channelId: string | null,
+  contributorPubkeys: string[],
+) {
+  const pubkeyKey = [...contributorPubkeys].sort().join(",");
+  return useQuery({
+    queryKey: ["dkg-memory", "entity-counts", channelId, pubkeyKey],
+    queryFn: () =>
+      fetchEntityCounts(channelId as string, [...contributorPubkeys].sort()),
+    enabled: Boolean(channelId),
+    staleTime: 60 * 1000,
+  });
+}

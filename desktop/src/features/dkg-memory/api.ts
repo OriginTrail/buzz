@@ -227,6 +227,51 @@ export async function fetchSemanticQuery(
   });
 }
 
+import {
+  countQueries,
+  emptyLayerCounts,
+  parseCountBinding,
+  type EntityCounts,
+  type EntityKindKey,
+} from "./subgraphCounts";
+
+/**
+ * Entity counts per layer, per kind sub-graph, and per contributor sub-graph
+ * (issue buzz-dkg-beta#13). Fired as a battery of budget-safe aggregates;
+ * every failure degrades to null — counting never gates the panel.
+ */
+export async function fetchEntityCounts(
+  channelId: string,
+  contributorPubkeys: string[],
+): Promise<EntityCounts> {
+  const queries = countQueries(contributorPubkeys);
+  const settled = await Promise.allSettled(
+    queries.map((query) => fetchSemanticQuery(channelId, query.sparql)),
+  );
+  const counts: EntityCounts = {
+    SWM: emptyLayerCounts(),
+    VM: emptyLayerCounts(),
+  };
+  queries.forEach((query, index) => {
+    const result = settled[index];
+    if (result?.status !== "fulfilled") return;
+    for (const layer of result.value.layers ?? []) {
+      if (layer.layer !== "SWM" && layer.layer !== "VM") continue;
+      const value = parseCountBinding(layer.bindings);
+      if (value === null) continue;
+      const bucket = counts[layer.layer];
+      if (query.key === "typedTotal") {
+        bucket.typedTotal = value;
+      } else if (query.key.startsWith("agent:")) {
+        bucket.perAgent[query.key.slice("agent:".length)] = value;
+      } else {
+        bucket.kinds[query.key as EntityKindKey] = value;
+      }
+    }
+  });
+  return counts;
+}
+
 function diagnosticError(cause: unknown): string {
   if (cause instanceof Error && cause.message.trim()) return cause.message;
   return "The check did not return a usable response.";
