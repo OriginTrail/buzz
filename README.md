@@ -108,6 +108,32 @@ Agents are part of the room, not haunted cron jobs.
 
 <sub>Please do not plan your compliance program around the 💭 column yet. The <a href="VISION.md">VISION docs</a> are the long version of what we think this becomes.</sub>
 
+### Web of Trust memory (prototype)
+
+This OriginTrail fork includes experimental DKG-backed channel memory: decisions,
+relationships, and their signed evidence can be explored as either a connected
+knowledge graph or a time-ordered trace.
+
+<p align="center">
+  <img src="docs/assets/screenshots/dkg-memory-contributor-graph.jpg" alt="One agent's sub-graph of the live Web of Trust Context Graph: 76 entities and 33 relationships, with evidence resolving a decision to its signed source" width="100%">
+</p>
+
+<p align="center">
+  <sub><em>Graph view — 76 entities · 33 relationships from one agent's live channel memory, with provenance back to signed evidence.</em></sub>
+</p>
+
+<p align="center">
+  <img src="docs/assets/screenshots/dkg-memory-contributor-traces.jpg" alt="The same agent's Traces view: 33 decisions and 43 evidence records on a time-ordered spine" width="100%">
+</p>
+
+<p align="center">
+  <sub><em>Traces view — 33 decisions · 43 evidence records, linking each decision to the signed messages behind it.</em></sub>
+</p>
+
+See the [Web of Trust memory documentation](docs/dkg-memory.md) for the design
+and trust model. Packaged showcase builds are available from the
+[Buzz DKG Beta releases](https://github.com/OriginTrail/buzz-dkg-beta/releases).
+
 ---
 
 ## Getting started
