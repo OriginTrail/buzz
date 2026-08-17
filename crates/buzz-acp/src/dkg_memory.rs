@@ -831,7 +831,7 @@ mod tests {
             .tags([Tag::parse(["h", "8e8cd542-e5d0-4f81-a060-e9980b20599d"]).unwrap()])
             .sign_with_keys(&keys)
             .unwrap();
-        let encoded = capture_evidence_json(&[event.clone()]).unwrap();
+        let encoded = capture_evidence_json(std::slice::from_ref(&event)).unwrap();
         assert!(encoded.contains(&event.id.to_hex()));
         assert!(encoded.contains("a durable decision"));
         assert!(encoded.contains(&event.pubkey.to_hex()));
