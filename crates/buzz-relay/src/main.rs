@@ -201,6 +201,12 @@ async fn main() -> anyhow::Result<()> {
         error!("Failed to ensure partitions: {e}");
     }
 
+    db.validate_deletion_serving_catalog().await.map_err(|e| {
+        error!("Community deletion serving-fence validation failed: {e}");
+        anyhow::anyhow!("Community deletion serving fence is unsafe: {e}")
+    })?;
+    info!("Community deletion serving fences verified");
+
     // Freshness fence probe: cursor pages route to the replica only for
     // history the probe has verified as fully replayed. Deliberately AFTER
     // the migration decision: spawn_fence_probe first verifies the
@@ -469,6 +475,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some(handle) = buzz_relay::mesh_boot::boot_mesh(
         &state.config,
         state.redis_pool.clone(),
+        state.db.clone(),
         &state.relay_keypair,
         Arc::clone(&state.shutting_down),
     )
@@ -525,6 +532,31 @@ async fn main() -> anyhow::Result<()> {
             transport_drops = report.transport_drops,
             "git object-store backend admitted: A3 conformance probe passed"
         );
+    }
+
+    match state.db.verify_channel_roster_fence().await {
+        Ok(()) => {
+            info!("Channel roster fence verified");
+        }
+        Err(error) => {
+            error!(%error, "Channel roster fence validation failed");
+            return Err(anyhow::anyhow!(
+                "Channel roster fence is unsafe; apply or repair migration 0032 before starting this relay: {error}"
+            ));
+        }
+    }
+
+    // Repair legacy NIP-29 channel rosters that were persisted while the
+    // canonical member query still truncated at 1,000 rows. Validation above
+    // makes migration 0032 a code/schema compatibility gate before the new
+    // replacement protocol or listener can serve traffic.
+    match buzz_relay::handlers::side_effects::reconcile_large_channel_member_snapshots(&state).await
+    {
+        Ok(count) if count > 0 => info!(count, "large channel member snapshots repaired"),
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(%error, "large channel member snapshot startup reconciliation failed")
+        }
     }
 
     // NIP-43: reconcile the event-backed roster for every provisioned
@@ -1018,6 +1050,24 @@ async fn main() -> anyhow::Result<()> {
                 metrics::gauge!("buzz_redis_pool_size").set(rs.size as f64);
                 metrics::gauge!("buzz_redis_pool_max").set(rs.max_size as f64);
                 metrics::gauge!("buzz_redis_pool_waiting").set(rs.waiting as f64);
+
+                let deletion_store = pool_state.db.deletion_store();
+                match deletion_store.reap_expired_serving_write_leases(1000).await {
+                    Ok(reaped) => metrics::counter!("buzz_deletion_serving_leases_reaped_total")
+                        .increment(reaped),
+                    Err(error) => tracing::warn!(%error, "serving-lease reaper failed"),
+                }
+                match deletion_store.serving_lease_stats().await {
+                    Ok(stats) => {
+                        metrics::gauge!("buzz_deletion_serving_leases_active")
+                            .set(stats.active as f64);
+                        metrics::gauge!("buzz_deletion_serving_leases_expired")
+                            .set(stats.expired as f64);
+                        metrics::gauge!("buzz_deletion_serving_leases_dead_tuples")
+                            .set(stats.dead_tuples as f64);
+                    }
+                    Err(error) => tracing::warn!(%error, "serving-lease metrics failed"),
+                }
             }
         });
     }

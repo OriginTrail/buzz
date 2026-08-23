@@ -590,6 +590,39 @@ impl EventQueue {
             .any(|id| !self.in_flight_channels.contains(id))
     }
 
+    /// Returns `true` if any undispatched work remains for a channel that is
+    /// NOT currently in-flight — *including* work held back only by a
+    /// `retry_after` backoff throttle.
+    ///
+    /// This is deliberately broader than [`has_flushable_work`](Self::has_flushable_work):
+    /// that method excludes `retry_after`-throttled channels because they are
+    /// not flushable *right now*, but the events are still queued and MUST be
+    /// delivered once the backoff deadline passes. Idle-pool-sleep teardown
+    /// must gate on this, not on flushability — a failed turn requeued with a
+    /// future backoff deadline is real queued work, and sleeping on it (while
+    /// the maintenance timer is disabled and lazy re-wake is itself gated by
+    /// flushability) would strand the batch until unrelated traffic arrives.
+    ///
+    /// Covers the three tables where undispatched, non-in-flight work can
+    /// live: non-empty `queues` (throttled or not), pending `cancelled_batches`,
+    /// and `withheld_native_steer` events. Read-only (no in-flight expiry) —
+    /// in-flight liveness is gated separately by [`has_in_flight`](Self::has_in_flight).
+    pub fn has_undispatched_work(&self) -> bool {
+        let has_queued = self
+            .queues
+            .iter()
+            .any(|(id, q)| !q.is_empty() && !self.in_flight_channels.contains(id));
+        let has_cancelled = self
+            .cancelled_batches
+            .keys()
+            .any(|id| !self.in_flight_channels.contains(id));
+        let has_withheld = self
+            .withheld_native_steer
+            .iter()
+            .any(|(id, v)| !v.is_empty() && !self.in_flight_channels.contains(id));
+        has_queued || has_cancelled || has_withheld
+    }
+
     /// Number of channels with pending events.
     pub fn pending_channels(&self) -> usize {
         self.queues.len()
@@ -842,47 +875,30 @@ pub struct ThreadTags {
 
 /// Parse NIP-10 thread tags from a Nostr event.
 ///
-/// Detection logic (per research doc §4c):
-/// - Find an `e` tag with `root` marker → its value is `root_event_id`
-/// - Find an `e` tag with `reply` marker → its value is `parent_event_id`
-/// - If only `reply` marker found (direct reply to root), root == parent
-/// - `p` tags → mentioned pubkeys
+/// Marker parsing and the (root, reply) → (root, parent) collapse are delegated
+/// to [`buzz_core::nip10`] so ACP anchoring reads ancestry exactly as relay
+/// ingest does. Only `p`-tag mention collection is local to ACP.
 ///
-/// NOTE: Only handles NIP-10 marker-based format (preferred). The deprecated
-/// positional format (no markers, `["e", id, relay_url]`) is not supported —
-/// Buzz always generates marker-based tags (see relay messages.rs:762-783).
+/// Consequences of sharing the resolver:
+/// - A malformed (non-64-hex) marker id is ignored, never a thread link —
+///   restoring parity with ingest (ACP previously counted it).
+/// - A lone `root` marker (no `reply`) is top-level, not a reply — again
+///   matching ingest.
 pub fn parse_thread_tags(event: &Event) -> ThreadTags {
-    let mut root = None;
-    let mut reply = None;
-    let mut mentions = Vec::new();
-
-    for tag in event.tags.iter() {
-        let parts = tag.as_slice();
-        match parts.first().map(|s| s.as_str()) {
-            Some("e") if parts.len() >= 4 => {
-                let id = &parts[1];
-                let marker = &parts[3];
-                match marker.as_str() {
-                    "root" => root = Some(id.clone()),
-                    "reply" => reply = Some(id.clone()),
-                    _ => {}
-                }
-            }
-            Some("p") if parts.len() >= 2 => {
-                mentions.push(parts[1].clone());
-            }
-            _ => {}
-        }
-    }
-
-    // For direct replies to root: single "reply" tag, no "root" tag.
-    // In that case, root == parent.
-    let (root_event_id, parent_event_id) = match (root, reply) {
-        (Some(r), Some(p)) => (Some(r), Some(p)),
-        (Some(r), None) => (Some(r.clone()), Some(r)),
-        (None, Some(p)) => (Some(p.clone()), Some(p)),
-        (None, None) => (None, None),
+    let markers = buzz_core::nip10::parse_thread_markers(&event.tags);
+    let (root_event_id, parent_event_id) = match markers.resolve() {
+        Some((root, parent)) => (Some(root), Some(parent)),
+        None => (None, None),
     };
+
+    let mentions = event
+        .tags
+        .iter()
+        .filter_map(|tag| {
+            let parts = tag.as_slice();
+            (parts.len() >= 2 && parts[0] == "p").then(|| parts[1].clone())
+        })
+        .collect();
 
     ThreadTags {
         root_event_id,
@@ -1415,6 +1431,8 @@ fn format_conversation_context(
 #[derive(Default)]
 pub struct FormatPromptArgs<'a> {
     pub agent_core: Option<&'a str>,
+    /// Owner-signed instructions for an active huddle channel.
+    pub huddle_instructions: Option<&'a str>,
     pub channel_info: Option<&'a PromptChannelInfo>,
     pub conversation_context: Option<&'a ConversationContext>,
     /// True when delivery-delta filtering removed at least one event that this
@@ -1423,13 +1441,13 @@ pub struct FormatPromptArgs<'a> {
     pub profile_lookup: Option<&'a PromptProfileLookup>,
     /// When true, base_prompt and system_prompt are delivered via the system
     /// role (session/new) and omitted from the user message. When false
-    /// (legacy agents), they are injected as `[Base]` and `[System]` sections.
+    /// (legacy agents), they are injected as `[Base]` and `[Agent Instructions]` sections.
     pub has_system_prompt_support: bool,
     /// Base prompt content for legacy agents (protocol_version < 2).
     pub base_prompt: Option<&'a str>,
     /// System prompt content for legacy agents (protocol_version < 2).
     pub system_prompt: Option<&'a str>,
-    /// Team instructions for legacy agents, rendered after `[System]`.
+    /// Team instructions for legacy agents, rendered after `[Agent Instructions]`.
     pub team_instructions: Option<&'a str>,
     /// Rendered `[Channel Canvas]` metadata section for legacy agents.
     ///
@@ -1463,18 +1481,19 @@ pub(crate) struct StandingContext<'a> {
     pub system_prompt: Option<&'a str>,
     pub team_instructions: Option<&'a str>,
     pub agent_core: Option<&'a str>,
+    pub huddle_instructions: Option<&'a str>,
     pub agent_canvas: Option<&'a str>,
 }
 
 impl StandingContext<'_> {
     /// Render the sections in the order legacy agents have always seen them.
     pub(crate) fn sections(&self) -> Vec<String> {
-        let mut sections = Vec::with_capacity(5);
+        let mut sections = Vec::with_capacity(6);
         if let Some(bp) = self.base_prompt {
             sections.push(base_section(bp));
         }
         if let Some(sp) = self.system_prompt {
-            sections.push(format!("[System]\n{sp}"));
+            sections.push(format!("[Agent Instructions]\n{sp}"));
         }
         if let Some(team) = self
             .team_instructions
@@ -1485,6 +1504,13 @@ impl StandingContext<'_> {
         }
         if let Some(core) = self.agent_core {
             sections.push(core.to_string());
+        }
+        if let Some(instructions) = self
+            .huddle_instructions
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            sections.push(format!("[Huddle Instructions]\n{instructions}"));
         }
         if let Some(canvas) = self.agent_canvas {
             sections.push(canvas.to_string());
@@ -1505,7 +1531,7 @@ pub(crate) fn base_section(base_prompt: &str) -> String {
 /// Format a [`FlushBatch`] into the per-section prompt blocks for the agent.
 ///
 /// Produces a stable prompt with these sections (in order):
-/// 0. [`StandingContext`] — `[Base]`, `[System]`, `[Team Instructions]`,
+/// 0. [`StandingContext`] — `[Base]`, `[Agent Instructions]`, `[Team Instructions]`,
 ///    `[Agent Memory — core]`, `[Channel Canvas]`. Legacy agents only, and only
 ///    on the session's first message (see `standing_context_sent`)
 /// 1. `[Context]` — scope, channel name, and contextual hints for the agent
@@ -1554,6 +1580,7 @@ pub fn format_prompt(batch: &FlushBatch, args: &FormatPromptArgs<'_>) -> Vec<Str
                 system_prompt: args.system_prompt,
                 team_instructions: args.team_instructions,
                 agent_core: args.agent_core,
+                huddle_instructions: args.huddle_instructions,
                 agent_canvas: args.agent_canvas,
             }
             .sections(),
@@ -2250,6 +2277,85 @@ mod tests {
         assert_eq!(batch2.events[1].event.content, "msg2");
     }
 
+    // ── Retry-throttled work must block idle-pool-sleep teardown ────────────
+    //
+    // Regression for the PR #5682 review blocker: a failed turn requeued with a
+    // future backoff deadline is real queued work. `has_flushable_work()`
+    // returns false for it (throttled → not flushable *now*), so gating
+    // idle-pool-sleep on flushability would tear down the pool while the batch
+    // sits waiting — and because lazy re-wake is itself gated on flushability
+    // and the maintenance timer is disabled while sleeping, the batch would be
+    // stranded until unrelated traffic arrived. `has_undispatched_work()` must
+    // see the throttled batch so the sleep gate keeps the pool alive.
+    #[test]
+    fn test_retry_throttled_batch_is_undispatched_but_not_flushable() {
+        let mut queue = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+        queue.push(make_queued(ch, "msg1"));
+        queue.push(make_queued(ch, "msg2"));
+
+        // Drive a real failure → requeue-with-backoff → mark_complete cycle.
+        let batch = queue.flush_next().unwrap();
+        assert_eq!(batch.events.len(), 2);
+        assert!(
+            queue.requeue(batch).is_none(),
+            "batch requeued, not dead-lettered"
+        );
+        queue.mark_complete(ch);
+
+        // The batch is back in the queue, no longer in-flight, and throttled by
+        // a future `retry_after`. BASE_RETRY_DELAY guarantees the deadline is in
+        // the future, so this is not timing-fragile.
+        assert!(
+            queue
+                .retry_after
+                .get(&ch)
+                .is_some_and(|&t| t > Instant::now()),
+            "requeue must have set a future backoff deadline"
+        );
+        assert!(!queue.has_in_flight(), "turn completed, nothing in-flight");
+
+        // The bug: throttled work is invisible to flushability...
+        assert!(
+            !queue.has_flushable_work(),
+            "throttled batch must NOT be flushable yet"
+        );
+        // ...but it IS undispatched work the sleep gate must protect.
+        assert!(
+            queue.has_undispatched_work(),
+            "retry-throttled batch MUST count as undispatched work"
+        );
+    }
+
+    #[test]
+    fn test_has_undispatched_work_false_when_truly_empty_or_in_flight() {
+        let mut queue = EventQueue::new(DedupMode::Queue);
+        let ch = Uuid::new_v4();
+
+        // Empty queue: no undispatched work.
+        assert!(!queue.has_undispatched_work());
+
+        // Dispatched batch (in-flight): the events left the queue, and an
+        // in-flight turn is gated separately (has_in_flight), so this must be
+        // false — otherwise the pool could never sleep after any turn.
+        queue.push(make_queued(ch, "msg1"));
+        assert!(
+            queue.has_undispatched_work(),
+            "queued-but-not-flushed is undispatched"
+        );
+        let batch = queue.flush_next().unwrap();
+        assert!(queue.has_in_flight());
+        assert!(
+            !queue.has_undispatched_work(),
+            "in-flight work is not undispatched — it is gated by has_in_flight"
+        );
+
+        // Completed cleanly (no requeue): fully drained, nothing left.
+        queue.mark_complete(batch.channel_id);
+        assert!(!queue.has_undispatched_work());
+        assert!(!queue.has_in_flight());
+    }
+
     #[test]
     fn test_requeue_interleaves_with_other_channels() {
         let mut queue = EventQueue::new(DedupMode::Queue);
@@ -2334,7 +2440,7 @@ mod tests {
         let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
         // system_prompt and base_prompt are delivered via session/new system role,
         // so they must NOT appear in the user message.
-        assert!(!prompt.contains("[System]"));
+        assert!(!prompt.contains("[Agent Instructions]"));
         assert!(!prompt.contains("[Base]"));
         assert!(prompt.starts_with("[Context]"));
     }
@@ -2447,12 +2553,12 @@ mod tests {
         // They are delivered via session/new system role instead.
         let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
         assert!(!prompt.contains("[Base]"));
-        assert!(!prompt.contains("[System]"));
+        assert!(!prompt.contains("[Agent Instructions]"));
         assert!(prompt.starts_with("[Context]"));
     }
 
     #[test]
-    fn test_format_prompt_legacy_agent_emits_base_and_system() {
+    fn test_format_prompt_legacy_agent_emits_base_and_agent_instructions() {
         let ch = Uuid::new_v4();
         let event = make_event("hello");
 
@@ -2486,20 +2592,23 @@ mod tests {
             "missing [Base] section"
         );
         assert!(
-            prompt.contains("[System]\ntest system prompt"),
-            "missing [System] section"
+            prompt.contains("[Agent Instructions]\ntest system prompt"),
+            "missing [Agent Instructions] section"
         );
 
-        // [Base] and [System] must appear BEFORE [Agent Memory] and [Context]
+        // [Base] and [Agent Instructions] must appear BEFORE [Agent Memory] and [Context]
         let base_pos = prompt.find("[Base]").unwrap();
-        let system_pos = prompt.find("[System]").unwrap();
+        let system_pos = prompt.find("[Agent Instructions]").unwrap();
         let core_pos = prompt.find("[Agent Memory").unwrap();
         let context_pos = prompt.find("[Context]").unwrap();
 
-        assert!(base_pos < system_pos, "[Base] should come before [System]");
+        assert!(
+            base_pos < system_pos,
+            "[Base] should come before [Agent Instructions]"
+        );
         assert!(
             system_pos < core_pos,
-            "[System] should come before [Agent Memory]"
+            "[Agent Instructions] should come before [Agent Memory]"
         );
         assert!(
             core_pos < context_pos,
@@ -2532,6 +2641,7 @@ mod tests {
             system_prompt: Some("test system prompt"),
             team_instructions: Some("ship small"),
             agent_core: Some(core),
+            huddle_instructions: None,
             agent_canvas: Some(canvas),
             standing_context_sent: sent,
             ..Default::default()
@@ -2542,7 +2652,7 @@ mod tests {
 
         for section in [
             "[Base]",
-            "[System]",
+            "[Agent Instructions]",
             "[Team Instructions]",
             "[Agent Memory — core]",
             "[Channel Canvas]",
@@ -2562,7 +2672,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_prompt_modern_agent_suppresses_base_and_system() {
+    fn test_format_prompt_modern_agent_suppresses_base_and_agent_instructions() {
         let ch = Uuid::new_v4();
         let event = make_event("hello");
 
@@ -2594,8 +2704,8 @@ mod tests {
             "[Base] should be suppressed for modern agents"
         );
         assert!(
-            !prompt.contains("[System]"),
-            "[System] should be suppressed for modern agents"
+            !prompt.contains("[Agent Instructions]"),
+            "[Agent Instructions] should be suppressed for modern agents"
         );
         assert!(prompt.starts_with("[Context]"));
     }
@@ -2654,9 +2764,9 @@ mod tests {
             context_pos < thread_pos,
             "[Context] must come before [Thread Context]"
         );
-        // No [Base] or [System] in user message
+        // No [Base] or [Agent Instructions] in user message
         assert!(!prompt.contains("[Base]"));
-        assert!(!prompt.contains("[System]"));
+        assert!(!prompt.contains("[Agent Instructions]"));
     }
 
     #[test]
@@ -3068,28 +3178,31 @@ mod tests {
     #[test]
     fn test_parse_thread_tags_direct_reply() {
         // Direct reply to root: single "reply" tag.
+        let root = "a".repeat(64);
         let event = make_event_with_tags(
             "reply to root",
-            vec![vec!["e".into(), "abc123".into(), "".into(), "reply".into()]],
+            vec![vec!["e".into(), root.clone(), "".into(), "reply".into()]],
         );
         let tags = parse_thread_tags(&event);
-        assert_eq!(tags.root_event_id.as_deref(), Some("abc123"));
-        assert_eq!(tags.parent_event_id.as_deref(), Some("abc123"));
+        assert_eq!(tags.root_event_id.as_deref(), Some(root.as_str()));
+        assert_eq!(tags.parent_event_id.as_deref(), Some(root.as_str()));
     }
 
     #[test]
     fn test_parse_thread_tags_nested_reply() {
         // Nested reply: root + reply tags.
+        let root = "a".repeat(64);
+        let parent = "b".repeat(64);
         let event = make_event_with_tags(
             "nested reply",
             vec![
-                vec!["e".into(), "root123".into(), "".into(), "root".into()],
-                vec!["e".into(), "parent456".into(), "".into(), "reply".into()],
+                vec!["e".into(), root.clone(), "".into(), "root".into()],
+                vec!["e".into(), parent.clone(), "".into(), "reply".into()],
             ],
         );
         let tags = parse_thread_tags(&event);
-        assert_eq!(tags.root_event_id.as_deref(), Some("root123"));
-        assert_eq!(tags.parent_event_id.as_deref(), Some("parent456"));
+        assert_eq!(tags.root_event_id.as_deref(), Some(root.as_str()));
+        assert_eq!(tags.parent_event_id.as_deref(), Some(parent.as_str()));
     }
 
     #[test]
@@ -3107,15 +3220,36 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_thread_tags_root_only() {
-        // Only root marker, no reply marker — root == parent.
+    fn test_parse_thread_tags_root_only_is_top_level() {
+        // Only a `root` marker, no `reply` — top-level, matching ingest. A lone
+        // `root` tag does not anchor a reply (behavior change from the old
+        // hand-rolled parser, which treated root == parent here).
+        let root = "a".repeat(64);
         let event = make_event_with_tags(
-            "reply",
-            vec![vec!["e".into(), "root123".into(), "".into(), "root".into()]],
+            "root only",
+            vec![vec!["e".into(), root, "".into(), "root".into()]],
         );
         let tags = parse_thread_tags(&event);
-        assert_eq!(tags.root_event_id.as_deref(), Some("root123"));
-        assert_eq!(tags.parent_event_id.as_deref(), Some("root123"));
+        assert!(tags.root_event_id.is_none());
+        assert!(tags.parent_event_id.is_none());
+    }
+
+    #[test]
+    fn test_parse_thread_tags_malformed_id_is_not_a_thread_link() {
+        // A non-64-hex marker id is ignored — parity with relay ingest, which
+        // never treats a malformed id as a thread link.
+        let event = make_event_with_tags(
+            "malformed marker",
+            vec![vec![
+                "e".into(),
+                "garbage".into(),
+                "".into(),
+                "reply".into(),
+            ]],
+        );
+        let tags = parse_thread_tags(&event);
+        assert!(tags.root_event_id.is_none());
+        assert!(tags.parent_event_id.is_none());
     }
 
     #[test]
@@ -3188,7 +3322,7 @@ mod tests {
             "yes go ahead",
             vec![vec![
                 "e".into(),
-                "root123".into(),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
                 "".into(),
                 "reply".into(),
             ]],
@@ -3206,7 +3340,9 @@ mod tests {
 
         let prompt = format_prompt(&batch, &FormatPromptArgs::default()).join("\n\n");
         assert!(prompt.contains("Scope: thread"));
-        assert!(prompt.contains("Thread root: root123"));
+        assert!(prompt.contains(
+            "Thread root: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ));
     }
 
     #[test]
@@ -3216,7 +3352,7 @@ mod tests {
             "yes go ahead",
             vec![vec![
                 "e".into(),
-                "root123".into(),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
                 "".into(),
                 "reply".into(),
             ]],
@@ -3521,7 +3657,7 @@ mod tests {
             "sounds good, do it",
             vec![vec![
                 "e".into(),
-                "root123".into(),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
                 "".into(),
                 "reply".into(),
             ]],
@@ -3574,7 +3710,9 @@ mod tests {
         );
         // Thread structural info should be present.
         assert!(
-            prompt.contains("Thread root: root123"),
+            prompt.contains(
+                "Thread root: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ),
             "DM reply should include thread root"
         );
         // Thread context should be included.
@@ -3588,7 +3726,7 @@ mod tests {
             "follow up",
             vec![vec![
                 "e".into(),
-                "root123".into(),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
                 "".into(),
                 "reply".into(),
             ]],
@@ -5186,7 +5324,7 @@ mod tests {
             "reply in thread",
             vec![vec![
                 "e".into(),
-                "root123".into(),
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
                 "".into(),
                 "reply".into(),
             ]],
