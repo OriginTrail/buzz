@@ -24,9 +24,7 @@ export type MessageComposerEditTarget = {
 
 export type MessageComposerProps = {
   audienceContext?: {
-    type: "thread";
-    threadRootId: string;
-    initialAgentPubkeys?: readonly string[];
+    type: "channel" | "thread";
   } | null;
   channelId?: string | null;
   channelName: string;
@@ -91,6 +89,8 @@ export type MessageComposerProps = {
       parentEventId: string | null;
       threadHeadId: string | null;
     } | null,
+    /** Route through the REST publisher even when best-effort enrichment settled empty. */
+    forceRest?: boolean,
   ) => Promise<void>;
   placeholder?: string;
   profiles?: UserProfileLookup;

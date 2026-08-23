@@ -9,8 +9,10 @@ import 'features/activity/inbox_local_state_provider.dart';
 import 'features/activity/inbox_read_state.dart';
 import 'features/channels/unread_badge/unread_badge_provider.dart';
 import 'features/home/home_page.dart';
+import 'features/invites/invite_create_page.dart';
 import 'features/pairing/pairing_page.dart';
 import 'features/channels/agent_activity/observer_subscription.dart';
+import 'features/channels/channel_detail_page.dart';
 import 'features/channels/deep_link_dispatcher.dart';
 import 'features/profile/user_status_cache_provider.dart';
 import 'features/profile/settings_profile_header.dart';
@@ -44,6 +46,8 @@ final _unreadInboxItemCountProvider = Provider<int>((ref) {
       )
       .length;
 });
+
+final _mobileRootNavigatorKey = GlobalKey<NavigatorState>();
 
 class App extends HookConsumerWidget {
   const App({super.key});
@@ -112,6 +116,7 @@ class App extends HookConsumerWidget {
     });
 
     return MaterialApp(
+      navigatorKey: _mobileRootNavigatorKey,
       title: 'Buzz',
       theme: AppTheme.light(
         colorScheme: lightScheme,
@@ -125,8 +130,10 @@ class App extends HookConsumerWidget {
       // Above the navigator, so a burst keeps playing over a pushed thread page
       // or a modal sheet — the same reason desktop pins its canvas to the
       // viewport rather than to the message row.
-      builder: (context, child) =>
-          EmojiBurstOverlay(child: child ?? const SizedBox.shrink()),
+      builder: (context, child) => MobileHuddleShell(
+        navigatorKey: _mobileRootNavigatorKey,
+        child: EmojiBurstOverlay(child: child ?? const SizedBox.shrink()),
+      ),
       home: authState.when(
         loading: () => const _SplashScreen(),
         error: (_, _) => const PairingPage(),
@@ -149,6 +156,7 @@ class App extends HookConsumerWidget {
 
 Widget _buildSettingsPage(BuildContext context) => SettingsPage(
   profileHeader: const SettingsProfileHeader(),
+  invitePageBuilder: (_) => const CommunityInvitePage(),
   identityRecoveryPageBuilder: (_) =>
       const PairingPage(addingCommunity: true, identityRecoveryOnly: true),
 );
