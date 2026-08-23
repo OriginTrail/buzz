@@ -7,8 +7,8 @@ use super::{
     default_agent_command, effective_agent_command, find_nvm_default_bin,
     is_login_shell_path_uninit, is_safe_nvm_tag, managed_agent_avatar_url, normalize_agent_args,
     parse_semver_tag, probe_codex_acp_version, record_agent_command, refresh_login_shell_path,
-    try_record_agent_command,
-    BUZZ_AGENT_AVATAR_URL, CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL, GOOSE_AVATAR_URL,
+    try_record_agent_command, BUZZ_AGENT_AVATAR_URL, CLAUDE_CODE_AVATAR_URL, CODEX_AVATAR_URL,
+    GOOSE_AVATAR_URL,
 };
 use crate::managed_agents::AcpAvailabilityStatus;
 
