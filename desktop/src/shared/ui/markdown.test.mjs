@@ -2,6 +2,21 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
+function renderedText(markup) {
+  const text = [];
+  let insideTag = false;
+  for (const character of markup) {
+    if (character === "<") {
+      insideTag = true;
+    } else if (character === ">") {
+      insideTag = false;
+    } else if (!insideTag) {
+      text.push(character);
+    }
+  }
+  return text.join("");
+}
+
 // These are copied here to avoid importing from .ts files that depend on
 // React (which isn't resolvable outside the bundler). Same pattern as
 // useMediaUpload.test.mjs inlining shortHash.
@@ -1106,7 +1121,7 @@ test("bare Buzz permalinks render cohesive icon-prefixed chips", () => {
     ),
   );
 
-  const visibleText = html.replace(/<[^>]+>/g, "");
+  const visibleText = renderedText(html);
   assert.equal((html.match(/data-buzz-link=""/g) ?? []).length, 6);
   assert.equal(
     (
@@ -1121,7 +1136,7 @@ test("bare Buzz permalinks render cohesive icon-prefixed chips", () => {
   assert.equal((html.match(/data-channel-deep-link=""/g) ?? []).length, 1);
   assert.match(html, /inline-chip-icon-channel/);
   assert.match(html, /wrapping-inline-chip/);
-  assert.match(html, /inline-chip-leading-fragment[^>]*>e</);
+  assert.match(html, /inline-chip-leading-fragment[^>]*>engin</);
   assert.match(html, /inline-chip-icon-pr/);
   assert.match(html, /inline-chip-icon-issue/);
   assert.match(html, /inline-chip-icon-repo/);
@@ -1145,7 +1160,7 @@ test("inline issue and pull-request chips show the repository name without the e
   const issueHtml = renderEntityChip(
     `buzz://issue?id=${EVENT_HEX}&owner=${OWNER_HEX}&d=buzz-world`,
   );
-  const issueText = issueHtml.replace(/<[^>]+>/g, "");
+  const issueText = renderedText(issueHtml);
   assert.equal(issueText, "buzz-world");
   assert.doesNotMatch(issueText, /c3b589fa/);
   assert.doesNotMatch(issueText, /·/);
@@ -1158,9 +1173,11 @@ test("inline issue and pull-request chips show the repository name without the e
   );
 
   // Pull-request chips follow the same stable inline identity policy.
-  const pullRequestText = renderEntityChip(
-    `buzz://pr?id=${EVENT_HEX}&owner=${OWNER_HEX}&d=buzz-world`,
-  ).replace(/<[^>]+>/g, "");
+  const pullRequestText = renderedText(
+    renderEntityChip(
+      `buzz://pr?id=${EVENT_HEX}&owner=${OWNER_HEX}&d=buzz-world`,
+    ),
+  );
   assert.equal(pullRequestText, "buzz-world");
   assert.doesNotMatch(pullRequestText, /c3b589fa/);
   assert.doesNotMatch(pullRequestText, /·/);
@@ -1176,7 +1193,7 @@ test("inline entity chip labels are bounded without truncating their accessible 
       relayOrigin: null,
     }),
   );
-  const visibleText = html.replace(/<[^>]+>/g, "");
+  const visibleText = renderedText(html);
   assert.equal(Array.from(visibleText).length, 48);
   assert.match(visibleText, /…$/);
   assert.match(
@@ -1221,7 +1238,7 @@ test("inline message chips omit fetched metadata and the event hash", () => {
     ),
   );
 
-  const visibleText = html.replace(/<[^>]+>/g, "");
+  const visibleText = renderedText(html);
   assert.equal((html.match(/data-message-link=""/g) ?? []).length, 1);
   assert.equal(visibleText.trim(), "engineering");
   assert.doesNotMatch(visibleText, /c3b589fa/);
@@ -1272,6 +1289,44 @@ test("authored Buzz permalink labels remain ordinary links", () => {
   assert.equal((html.match(/underline-offset-4/g) ?? []).length, 4);
 });
 
+test("generic audio attachments render outside paragraph markup", () => {
+  const href = "https://relay.example/media/meeting.mp3";
+  const markdown = renderCachedMarkdown({
+    components: createMarkdownComponents(true, false),
+    content: `[meeting.mp3](${href})`,
+    variant: "generic-audio-block-integration-test",
+  });
+  const html = renderToStaticMarkup(
+    React.createElement(
+      MarkdownRuntimeContext.Provider,
+      {
+        value: {
+          channels: [],
+          imetaByUrl: new Map([
+            [
+              href,
+              {
+                duration: 42,
+                filename: "meeting.mp3",
+                m: "audio/mpeg",
+              },
+            ],
+          ]),
+          onOpenChannel: () => {},
+          onOpenEntityLink: () => {},
+          onOpenMessageLink: () => {},
+          relayOrigin: "https://relay.example",
+        },
+      },
+      markdown,
+    ),
+  );
+
+  assert.match(html, /data-testid="audio-message-attachment"/);
+  assert.match(html, /aria-label="Download meeting.mp3"/);
+  assert.doesNotMatch(html, /<p[^>]*>\s*<div/);
+});
+
 test("bare Buzz permalinks shorten unavailable channel identifiers", () => {
   const channelId = "580ca78b-9dae-46f3-8854-bd671853ba32";
   const markdown = renderCachedMarkdown({
@@ -1299,7 +1354,7 @@ test("bare Buzz permalinks shorten unavailable channel identifiers", () => {
   );
 
   assert.equal(
-    (html.match(/inline-chip-leading-fragment[^>]*>5<\/span>80ca78b/g) ?? [])
+    (html.match(/inline-chip-leading-fragment[^>]*>580ca<\/span>78b/g) ?? [])
       .length,
     2,
   );
@@ -1332,8 +1387,8 @@ test("channel references replace the authored hash with the channel icon", () =>
 
   assert.match(html, /inline-chip-icon-channel/);
   assert.match(html, /wrapping-inline-chip/);
-  assert.match(html, /inline-chip-leading-fragment[^>]*>e</);
-  assert.match(html.replace(/<[^>]+>/g, ""), /engineering/);
+  assert.match(html, /inline-chip-leading-fragment[^>]*>engin</);
+  assert.match(renderedText(html), /engineering/);
   assert.doesNotMatch(html, />#engineering</);
 });
 
@@ -1362,7 +1417,12 @@ test("resolved human mentions replace the authored at-sign with the shared icon"
   );
 
   assert.match(html, /data-mention=""/);
-  assert.match(html, /inline-chip-icon-human/);
+  assert.match(
+    html,
+    /inline-chip-leading-fragment[^>]*inline-chip-icon-human[^>]*>alice<\/span>/,
+  );
+  assert.match(html, /aria-label="alice"/);
+  assert.doesNotMatch(html, /aria-hidden="true"[^>]*>alice</);
   assert.match(html, />alice</);
   assert.doesNotMatch(html, />@alice</);
 });
@@ -1394,7 +1454,12 @@ test("agent mentions retain the bot treatment instead of the human icon", () => 
 
   assert.match(html, /data-mention=""/);
   assert.match(html, /agent-mention-highlight/);
-  assert.match(html, /inline-chip-icon-agent/);
+  assert.match(
+    html,
+    /inline-chip-leading-fragment[^>]*inline-chip-icon-agent[^>]*>alice<\/span>/,
+  );
+  assert.match(html, /aria-label="alice"/);
+  assert.doesNotMatch(html, /aria-hidden="true"[^>]*>alice</);
   assert.match(html, />alice</);
   assert.doesNotMatch(html, />@alice</);
 });
@@ -1435,4 +1500,54 @@ test("renderEntityLinkAnchor keeps chip styling when interaction is disabled", (
   assert.match(html, /<span/);
   assert.match(html, /class="mention-chip\s/);
   assert.doesNotMatch(html, /<button/);
+});
+
+test("ambiguous longer aliases stay literal rather than rendering a shorter tagged chip", async () => {
+  const { resolveMentionProps } = await import("../lib/resolveMentionNames.ts");
+  const a = "a".repeat(64),
+    b = "b".repeat(64),
+    c = "c".repeat(64);
+  for (const includeShorter of [false, true]) {
+    const content = `@Scout Jones hello${includeShorter ? " @Scout!" : ""}`;
+    const props = resolveMentionProps(
+      [
+        ["p", a],
+        ["p", b],
+        ["p", c],
+      ],
+      {
+        [a]: { displayName: "Scout" },
+        [b]: { displayName: "Scout Jones" },
+        [c]: { displayName: "Scout Jones" },
+      },
+      content,
+    );
+    const markdown = renderCachedMarkdown({
+      components: createMarkdownComponents(false, false),
+      content,
+      mentionNames: props.mentionNames,
+      variant: "ambiguous-prefix-test",
+    });
+    const html = renderToStaticMarkup(
+      React.createElement(
+        MarkdownRuntimeContext.Provider,
+        {
+          value: {
+            channels: [],
+            mentionPubkeysByName: props.mentionPubkeysByName,
+            onOpenChannel() {},
+            onOpenEntityLink() {},
+            onOpenMessageLink() {},
+            relayOrigin: null,
+          },
+        },
+        markdown,
+      ),
+    );
+    assert.match(html, /@Scout Jones hello/);
+    assert.equal(
+      (html.match(/data-mention=""/g) ?? []).length,
+      includeShorter ? 1 : 0,
+    );
+  }
 });

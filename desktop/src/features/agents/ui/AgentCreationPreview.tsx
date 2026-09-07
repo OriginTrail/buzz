@@ -3,7 +3,6 @@ import Picker from "@emoji-mart/react";
 import * as React from "react";
 import { Link2, Pencil, Plus, UploadCloud } from "lucide-react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-
 import { MaskedAvatarBadgeFrame } from "@/features/profile/ui/MaskedAvatarBadgeFrame";
 import { ProfileAvatar } from "@/features/profile/ui/ProfileAvatar";
 import {
@@ -44,6 +43,30 @@ import {
   type EmojiMartEmoji,
   isAvatarFileDrag,
 } from "./AgentCreationPreview.utils";
+
+function safeAvatarPreviewUrl(value: string | null | undefined) {
+  const candidate = value?.trim();
+  if (!candidate) {
+    return undefined;
+  }
+
+  if (
+    /^data:image\/(?:gif|jpeg|png|webp);base64,[a-z0-9+/=\s]+$/iu.test(
+      candidate,
+    )
+  ) {
+    return candidate;
+  }
+
+  try {
+    const parsed = new URL(candidate);
+    return parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? parsed.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export function AgentCreationPreview({
   assetLabel = "avatar",
@@ -127,12 +150,10 @@ export function AgentCreationPreview({
     },
     processImage,
   });
-
   useEmojiMartStyles(
     emojiPickerContainerRef,
     isAvatarMenuOpen && activeTab === "emoji",
   );
-
   // Emoji Mart mounts its search input inside a shadow root. Wait for it
   // before focusing so the surrounding Radix popover cannot win the race.
   React.useEffect(() => {
@@ -282,6 +303,11 @@ export function AgentCreationPreview({
     () => parseEmojiAvatarDataUrl(avatarUrl ?? ""),
     [avatarUrl],
   );
+  const avatarPreviewUrl = React.useMemo(
+    () => safeAvatarPreviewUrl(avatarUrl),
+    [avatarUrl],
+  );
+  const hasRenderableAvatar = Boolean(emojiAvatarPreview || avatarPreviewUrl);
   const applyButtonTransition = shouldReduceMotion
     ? { duration: 0 }
     : AVATAR_APPLY_MOTION_TRANSITION;
@@ -728,7 +754,7 @@ export function AgentCreationPreview({
                     ? isCompact
                       ? "rounded-2xl"
                       : "rounded-[2rem]"
-                    : "rounded-full",
+                    : "rounded-[30%]",
                 )}
                 role="img"
                 style={{ backgroundColor: emojiAvatarPreview.color }}
@@ -742,18 +768,19 @@ export function AgentCreationPreview({
                   {emojiAvatarPreview.emoji}
                 </span>
               </div>
-            ) : isRoundedSquare && avatarUrl ? (
+            ) : isRoundedSquare && avatarPreviewUrl ? (
               <img
                 alt={`${label} ${assetLabel}`}
                 className={cn(
                   "h-full w-full object-cover shadow-xs",
                   isCompact ? "rounded-2xl" : "rounded-[2rem]",
                 )}
-                src={avatarUrl}
+                src={avatarPreviewUrl}
               />
             ) : (
               <ProfileAvatar
-                avatarUrl={avatarUrl}
+                avatarUrl={avatarPreviewUrl ?? null}
+                shape="squircle"
                 className={cn(
                   "h-full w-full",
                   isCompact ? "text-base" : "text-4xl",
@@ -801,7 +828,7 @@ export function AgentCreationPreview({
             <div
               className={cn("relative", isCompact ? "h-16 w-16" : "h-36 w-36")}
             >
-              {hasAvatar && isRoundedSquare ? (
+              {hasRenderableAvatar && isRoundedSquare ? (
                 <MaskedAvatarBadgeFrame
                   badge={
                     <PopoverTrigger asChild>
@@ -886,11 +913,11 @@ export function AgentCreationPreview({
                           !isAvatarMenuOpen &&
                           "ring-2 ring-primary/30",
                       )}
-                      src={avatarUrl ?? ""}
+                      src={avatarPreviewUrl}
                     />
                   )}
                 </MaskedAvatarBadgeFrame>
-              ) : hasAvatar ? (
+              ) : hasRenderableAvatar ? (
                 <MaskedAvatarBadgeFrame
                   badge={
                     <PopoverTrigger asChild>
@@ -927,6 +954,7 @@ export function AgentCreationPreview({
                   }
                   className={isCompact ? "h-16 w-16" : "h-36 w-36"}
                   clipTestId={`${testIdPrefix}-mask`}
+                  cornerRadius={(isCompact ? 64 : 144) * 0.3}
                   cutout={
                     isCompact
                       ? { cx: 58, cy: 58, r: 16.5 }
@@ -938,7 +966,7 @@ export function AgentCreationPreview({
                   {emojiAvatarPreview ? (
                     <div
                       aria-label={`${label} ${assetLabel}`}
-                      className="relative flex h-full w-full shrink-0 items-center justify-center overflow-hidden rounded-full shadow-xs transition-[background-color] duration-200 ease-out"
+                      className="relative flex h-full w-full shrink-0 items-center justify-center overflow-hidden rounded-[30%] shadow-xs transition-[background-color] duration-200 ease-out"
                       role="img"
                       style={{
                         backgroundColor: emojiAvatarPreview.color,
@@ -963,7 +991,8 @@ export function AgentCreationPreview({
                     </div>
                   ) : (
                     <ProfileAvatar
-                      avatarUrl={avatarUrl}
+                      avatarUrl={avatarPreviewUrl ?? null}
+                      shape="squircle"
                       className={cn(
                         "h-full w-full transition-shadow duration-150",
                         isCompact ? "text-base" : "text-4xl",
@@ -986,7 +1015,7 @@ export function AgentCreationPreview({
                         ? isCompact
                           ? "rounded-2xl"
                           : "rounded-[2rem]"
-                        : "rounded-full",
+                        : "rounded-[30%]",
                       isDragOverAvatar &&
                         !isAvatarMenuOpen &&
                         "border-primary/70 bg-primary/5 ring-2 ring-primary/15",

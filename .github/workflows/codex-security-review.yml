@@ -1,0 +1,18 @@
+name: Codex Security Review (upstream-only)
+
+# block/buzz owns the privileged review automation, organization membership
+# checks, and secrets used by the upstream version of this workflow. The
+# OriginTrail fork intentionally exposes only this inert manual placeholder.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  upstream-only:
+    name: Upstream-only workflow
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Explain fork policy
+        run: echo "The automated Codex security-review workflow is owned and operated by block/buzz."

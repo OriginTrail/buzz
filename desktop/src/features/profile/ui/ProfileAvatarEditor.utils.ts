@@ -275,13 +275,17 @@ export function parseEmojiAvatarDataUrl(
       avatarUrl.slice(EMOJI_AVATAR_DATA_URL_PREFIX.length),
     );
     const color = svg.match(/<rect\b[^>]*\sfill="([^"]+)"/u)?.[1];
-    const emoji = svg.match(/<text\b[^>]*>(.*?)<\/text>/u)?.[1];
+    const encodedEmoji = svg.match(/<text\b[^>]*>(.*?)<\/text>/u)?.[1];
 
-    if (!color || !emoji) {
+    if (!color || !/^#[0-9a-f]{6}$/iu.test(color) || !encodedEmoji) {
       return null;
     }
 
-    return { color, emoji: unescapeSvgText(emoji) };
+    // Emoji avatars are rendered as React text, but also remove HTML
+    // metacharacters at the data-URL boundary so this decoded value cannot be
+    // reinterpreted as markup by any future renderer.
+    const emoji = unescapeSvgText(encodedEmoji).replace(/[<>&]/gu, "");
+    return emoji ? { color, emoji } : null;
   } catch {
     return null;
   }
