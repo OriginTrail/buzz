@@ -63,7 +63,9 @@ async function addMessageStep(
 ) {
   await dialog.getByRole("button", { name: "Add step", exact: true }).click();
   await page.getByRole("menuitem", { name: "Send Message" }).click();
-  await dialog.getByLabel("Message text").fill("Workflow notification");
+  const messageText = dialog.locator("#wf-step-0-text");
+  await expect(messageText).toBeVisible();
+  await messageText.fill("Workflow notification");
 }
 
 async function createEnabled(
