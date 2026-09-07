@@ -38,16 +38,36 @@ export function findReadmeFile(files: ProjectRepoFile[]) {
 }
 
 function decodeHtmlEntities(value: string) {
-  return value
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+  const entities: Record<string, string> = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    "#39": "'",
+  };
+  return value.replace(
+    /&(amp|lt|gt|quot|#39);/g,
+    (_match, entity: string) => entities[entity] ?? "",
+  );
+}
+
+function stripHtmlTags(value: string) {
+  const text: string[] = [];
+  let insideTag = false;
+  for (const character of value) {
+    if (character === "<") {
+      insideTag = true;
+    } else if (character === ">") {
+      insideTag = false;
+    } else if (!insideTag) {
+      text.push(character);
+    }
+  }
+  return text.join("");
 }
 
 function htmlInlineToMarkdown(value: string): string {
-  return decodeHtmlEntities(value)
+  const markdown = value
     .replace(/<br\s*\/?\s*>/gi, "\n")
     .replace(/<img\b([^>]*)>/gi, (_match: string, attrs: string) => {
       const src = attrs.match(/\bsrc=["']([^"']+)["']/i)?.[1];
@@ -63,9 +83,8 @@ function htmlInlineToMarkdown(value: string): string {
     .replace(/<(em|i)\b[^>]*>([\s\S]*?)<\/\1>/gi, "*$2*")
     .replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, "`$1`")
     .replace(/<sub\b[^>]*>([\s\S]*?)<\/sub>/gi, "$1")
-    .replace(/<span\b[^>]*>([\s\S]*?)<\/span>/gi, "$1")
-    .replace(/<[^>]+>/g, "")
-    .trim();
+    .replace(/<span\b[^>]*>([\s\S]*?)<\/span>/gi, "$1");
+  return decodeHtmlEntities(stripHtmlTags(markdown)).trim();
 }
 
 function normalizeReadmeMarkdown(content: string) {

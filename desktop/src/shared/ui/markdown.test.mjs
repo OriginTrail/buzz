@@ -2,6 +2,21 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
+function renderedText(markup) {
+  const text = [];
+  let insideTag = false;
+  for (const character of markup) {
+    if (character === "<") {
+      insideTag = true;
+    } else if (character === ">") {
+      insideTag = false;
+    } else if (!insideTag) {
+      text.push(character);
+    }
+  }
+  return text.join("");
+}
+
 // These are copied here to avoid importing from .ts files that depend on
 // React (which isn't resolvable outside the bundler). Same pattern as
 // useMediaUpload.test.mjs inlining shortHash.
@@ -1106,7 +1121,7 @@ test("bare Buzz permalinks render cohesive icon-prefixed chips", () => {
     ),
   );
 
-  const visibleText = html.replace(/<[^>]+>/g, "");
+  const visibleText = renderedText(html);
   assert.equal((html.match(/data-buzz-link=""/g) ?? []).length, 6);
   assert.equal(
     (
@@ -1145,7 +1160,7 @@ test("inline issue and pull-request chips show the repository name without the e
   const issueHtml = renderEntityChip(
     `buzz://issue?id=${EVENT_HEX}&owner=${OWNER_HEX}&d=buzz-world`,
   );
-  const issueText = issueHtml.replace(/<[^>]+>/g, "");
+  const issueText = renderedText(issueHtml);
   assert.equal(issueText, "buzz-world");
   assert.doesNotMatch(issueText, /c3b589fa/);
   assert.doesNotMatch(issueText, /·/);
@@ -1158,9 +1173,11 @@ test("inline issue and pull-request chips show the repository name without the e
   );
 
   // Pull-request chips follow the same stable inline identity policy.
-  const pullRequestText = renderEntityChip(
-    `buzz://pr?id=${EVENT_HEX}&owner=${OWNER_HEX}&d=buzz-world`,
-  ).replace(/<[^>]+>/g, "");
+  const pullRequestText = renderedText(
+    renderEntityChip(
+      `buzz://pr?id=${EVENT_HEX}&owner=${OWNER_HEX}&d=buzz-world`,
+    ),
+  );
   assert.equal(pullRequestText, "buzz-world");
   assert.doesNotMatch(pullRequestText, /c3b589fa/);
   assert.doesNotMatch(pullRequestText, /·/);
@@ -1176,7 +1193,7 @@ test("inline entity chip labels are bounded without truncating their accessible 
       relayOrigin: null,
     }),
   );
-  const visibleText = html.replace(/<[^>]+>/g, "");
+  const visibleText = renderedText(html);
   assert.equal(Array.from(visibleText).length, 48);
   assert.match(visibleText, /…$/);
   assert.match(
@@ -1221,7 +1238,7 @@ test("inline message chips omit fetched metadata and the event hash", () => {
     ),
   );
 
-  const visibleText = html.replace(/<[^>]+>/g, "");
+  const visibleText = renderedText(html);
   assert.equal((html.match(/data-message-link=""/g) ?? []).length, 1);
   assert.equal(visibleText.trim(), "engineering");
   assert.doesNotMatch(visibleText, /c3b589fa/);
@@ -1371,7 +1388,7 @@ test("channel references replace the authored hash with the channel icon", () =>
   assert.match(html, /inline-chip-icon-channel/);
   assert.match(html, /wrapping-inline-chip/);
   assert.match(html, /inline-chip-leading-fragment[^>]*>engin</);
-  assert.match(html.replace(/<[^>]+>/g, ""), /engineering/);
+  assert.match(renderedText(html), /engineering/);
   assert.doesNotMatch(html, />#engineering</);
 });
 
