@@ -143,6 +143,8 @@ jobs:
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.desktop-rust == 'true'
     uses: ./.github/workflows/_ci-rust.yml
+    permissions:
+      contents: read
     with:
       rust: ${{ needs.changes.outputs.rust == 'true' }}
       desktop_rust: ${{ needs.changes.outputs.desktop-rust == 'true' }}
@@ -153,6 +155,8 @@ jobs:
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
     uses: ./.github/workflows/_ci-rust.yml
+    permissions:
+      contents: read
     with:
       rust: ${{ needs.changes.outputs.rust == 'true' }}
       desktop_rust: ${{ needs.changes.outputs.desktop-rust == 'true' }}
@@ -163,6 +167,8 @@ jobs:
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
     uses: ./.github/workflows/_ci-desktop.yml
+    permissions:
+      contents: read
     with:
       rust: ${{ needs.changes.outputs.rust == 'true' }}
       desktop: ${{ needs.changes.outputs.desktop == 'true' }}
@@ -173,6 +179,8 @@ jobs:
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
     uses: ./.github/workflows/_ci-relay.yml
+    permissions:
+      contents: read
     with:
       rust: ${{ needs.changes.outputs.rust == 'true' }}
       desktop: ${{ needs.changes.outputs.desktop == 'true' }}
@@ -184,6 +192,8 @@ jobs:
     needs: [changes, relay-artifacts-domain]
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
     uses: ./.github/workflows/_ci-relay.yml
+    permissions:
+      contents: read
     with:
       rust: ${{ needs.changes.outputs.rust == 'true' }}
       desktop: ${{ needs.changes.outputs.desktop == 'true' }}
@@ -195,6 +205,8 @@ jobs:
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
     uses: ./.github/workflows/_ci-desktop-macos.yml
+    permissions:
+      contents: read
     with:
       rust: ${{ needs.changes.outputs.rust == 'true' }}
       desktop: ${{ needs.changes.outputs.desktop == 'true' }}
@@ -205,6 +217,8 @@ jobs:
     needs: [changes, relay-artifacts-domain]
     if: github.event_name == 'push' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.desktop-rust == 'true' || needs.changes.outputs.rust == 'true'
     uses: ./.github/workflows/_ci-relay.yml
+    permissions:
+      contents: read
     with:
       rust: ${{ needs.changes.outputs.rust == 'true' }}
       desktop: ${{ needs.changes.outputs.desktop == 'true' }}
@@ -216,6 +230,8 @@ jobs:
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.web == 'true' || needs.changes.outputs.mobile == 'true'
     uses: ./.github/workflows/_ci-clients.yml
+    permissions:
+      contents: read
     with:
       web: ${{ needs.changes.outputs.web == 'true' }}
       mobile: ${{ needs.changes.outputs.mobile == 'true' }}
@@ -226,6 +242,8 @@ jobs:
     needs: [changes]
     if: needs.changes.outputs.mobile == 'true'
     uses: ./.github/workflows/_ci-clients.yml
+    permissions:
+      contents: read
     with:
       web: ${{ needs.changes.outputs.web == 'true' }}
       mobile: ${{ needs.changes.outputs.mobile == 'true' }}
@@ -236,6 +254,8 @@ jobs:
     needs: [changes]
     if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
     uses: ./.github/workflows/_ci-security.yml
+    permissions:
+      contents: read
     with:
       rust: ${{ needs.changes.outputs.rust == 'true' }}
 

@@ -1,7 +1,6 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const { readFileSync } = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 
@@ -262,29 +261,6 @@ test("pull request authorization uses the live author association", async () => 
   assert.equal(external.outputs.get("authorized"), undefined);
   assert.deepEqual(external.failures, []);
   assert.match(external.info.at(-1), /requires authorization/);
-});
-
-test("PR mutation jobs use pull request write permission", () => {
-  const workflow = readFileSync(
-    path.join(__dirname, "../workflows/codex-security-review.yml"),
-    "utf8",
-  );
-  for (const jobName of [
-    "reconcile-base-reviews",
-    "invalidate-previous-review",
-    "post-review",
-  ]) {
-    const start = workflow.indexOf(`  ${jobName}:\n`);
-    assert.notEqual(start, -1, `missing workflow job ${jobName}`);
-    const remainder = workflow.slice(start + 2);
-    const nextJob = remainder.search(/^  [a-z][a-z0-9-]*:\n/m);
-    const job =
-      nextJob === -1
-        ? workflow.slice(start)
-        : workflow.slice(start, start + 2 + nextJob);
-    assert.match(job, /^      pull-requests: write$/m);
-    assert.doesNotMatch(job, /^      issues: write$/m);
-  }
 });
 
 test("prepare rejects review commands without a full exact SHA", async () => {

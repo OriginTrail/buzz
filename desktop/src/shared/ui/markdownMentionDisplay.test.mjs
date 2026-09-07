@@ -9,6 +9,21 @@ import { MarkdownRuntimeContext } from "./markdown/runtimeContext.ts";
 
 const KEY = `150b20bd${"a".repeat(52)}15dc`;
 
+function renderedText(markup) {
+  const text = [];
+  let insideTag = false;
+  for (const character of markup) {
+    if (character === "<") {
+      insideTag = true;
+    } else if (character === ">") {
+      insideTag = false;
+    } else if (!insideTag) {
+      text.push(character);
+    }
+  }
+  return text.join("");
+}
+
 for (const agent of [false, true]) {
   test(`rendered ${agent ? "agent" : "human"} abbreviates a bound key without changing its metadata`, () => {
     const label = `Scout (${KEY}) 2`;
@@ -31,10 +46,7 @@ for (const agent of [false, true]) {
         }),
       ),
     );
-    assert.equal(
-      html.replace(/<[^>]+>/g, ""),
-      `Ask Scout (${truncatePubkey(KEY)}) 2`,
-    );
+    assert.equal(renderedText(html), `Ask Scout (${truncatePubkey(KEY)}) 2`);
     assert.ok(html.includes(`data-mention-label="${label}"`));
     assert.ok(html.includes(`data-mention-pubkey="${KEY}"`));
     assert.ok(html.includes(`title="${label}"`));
