@@ -166,14 +166,16 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::queue::BatchEvent;
+    use crate::{queue::BatchEvent, scope::SessionScope};
 
     fn batch(content: &str) -> FlushBatch {
         let event = EventBuilder::new(Kind::Custom(9), content)
             .sign_with_keys(&Keys::generate())
             .expect("signed event");
+        let channel_id = Uuid::new_v4();
         FlushBatch {
-            channel_id: Uuid::new_v4(),
+            channel_id,
+            scope: SessionScope::Conversation { channel_id },
             events: vec![BatchEvent {
                 event,
                 prompt_tag: "mention".to_string(),

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Hash, LogIn } from "lucide-react";
+import { LogIn } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import { useAppNavigation } from "@/app/navigation/useAppNavigation";
 import { useMediaUpload } from "@/features/messages/lib/useMediaUpload";
@@ -13,6 +13,7 @@ import { useRelaySelfQuery } from "@/features/moderation/hooks";
 import { DropZoneOverlay } from "@/features/messages/ui/ComposerAttachments";
 import { MessageThreadPanel } from "@/features/messages/ui/MessageThreadPanel";
 import { MessageThreadPanelSkeleton } from "@/features/messages/ui/MessageThreadPanelSkeleton";
+import { ThreadRepliesErrorCard } from "@/features/messages/ui/MessageThreadReplyState";
 import {
   MessageTimeline,
   type MessageTimelineHandle,
@@ -29,7 +30,12 @@ import { AgentSessionThreadPanel } from "@/features/channels/ui/AgentSessionThre
 import { ChannelManagementAuxiliaryPanel } from "@/features/channels/ui/ChannelManagementAuxiliaryPanel";
 import { DkgMemoryDock } from "@/features/dkg-memory/ui/DkgMemoryDock";
 import { useDkgMemoryMessageAdornments } from "@/features/dkg-memory/ui/messageAdornments";
+import { IdleAuxiliaryPanel } from "@/features/channels/ui/IdleAuxiliaryPanel";
 import { RightAuxiliaryPane } from "@/features/channels/ui/RightAuxiliaryPane";
+import {
+  ThreadPanelSurface,
+  useThreadPanelSurface,
+} from "@/features/channels/ui/ThreadPanelSurface";
 import { ThreadViewModeToggle } from "@/features/channels/ui/ThreadViewModeToggle";
 import { FocusThreadDrawer } from "@/features/channels/ui/FocusThreadDrawer";
 import { THREAD_SURFACE_KEY } from "@/features/channels/lib/threadFocusLayout";
@@ -46,18 +52,24 @@ import {
   WelcomeComposerGuidanceLayer,
 } from "@/features/channels/ui/WelcomeComposerBanner";
 import { useWelcomeComposerBanner } from "@/features/channels/ui/useWelcomeComposerBanner";
-import { mentionsKnownAgent } from "@/features/channels/ui/ChannelPane.helpers";
+import {
+  mentionsKnownAgent,
+  selectThreadComposerBotTypingPubkeys,
+  shouldPrioritizeIdleAuxiliary,
+  shouldUseFocusIdleDrawer,
+} from "@/features/channels/ui/ChannelPane.helpers";
 import { HuddleStartingView, HuddleTranscriptIntro } from "@/features/huddle";
+import { ChannelGlyph } from "@/features/channels/ui/ChannelGlyph";
+import { useSearchHighlightProps } from "@/features/channels/ui/useSearchHighlightProps";
 import { useChannelIntro } from "@/features/channels/ui/useChannelIntro";
 import type { ChannelPaneProps } from "@/features/channels/ui/ChannelPane.types";
 import * as agentSessionSelection from "@/features/channels/ui/agentSessionSelection";
 import { usePrepareDmSendChannel } from "@/features/channels/ui/usePrepareDmSendChannel";
 import { useChannelPaneMessages } from "@/features/channels/ui/useChannelPaneMessages";
+import { useRoutedMessageEdit } from "@/features/channels/ui/useRoutedMessageEdit";
 import { Button } from "@/shared/ui/button";
 import { useRenderScopedReactionHydration } from "@/features/messages/lib/useRenderScopedReactionHydration";
-import type { TimelineMessage } from "@/features/messages/types";
 import { isWelcomeExperienceChannel as isWelcomeExperience } from "@/features/onboarding/welcome";
-import { KIND_SYSTEM_MESSAGE } from "@/shared/constants/kinds";
 import { useIsThreadPanelOverlay } from "@/shared/hooks/use-mobile";
 import { channelChrome } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
@@ -79,6 +91,10 @@ export const ChannelPane = React.memo(function ChannelPane({
   editTarget = null,
   fetchOlder,
   header,
+  idleAuxiliaryPanel = null,
+  idleAuxiliaryHeaderActions,
+  idleAuxiliaryOverridesThread = false,
+  idleAuxiliaryTitle = "",
   hasOlderMessages,
   historyExhausted,
   isFetchingOlder,
@@ -90,13 +106,17 @@ export const ChannelPane = React.memo(function ChannelPane({
   isJoining = false,
   isSinglePanelView = false,
   isSending,
+  isTimelineError = false,
   isTimelineLoading,
+  onRetryTimeline,
   entranceMessageId = null,
   onEntranceMessageComplete,
   welcomeKickoffStage = null,
   welcomeKickoffSettingUp = false,
   messages,
   threadSummaries,
+  huddleThreadRepliesError = false,
+  onRetryHuddleThreadReplies,
   firstUnreadMessageId = null,
   unreadCount = 0,
   canResetThreadPanelWidth,
@@ -106,8 +126,10 @@ export const ChannelPane = React.memo(function ChannelPane({
   onCloseAgentSession,
   onCloseChannelManagement,
   onChannelManagementDeleted,
+  onCloseIdleAuxiliaryPanel,
   onCloseProfilePanel,
   onAddAgent,
+  onAddFiles,
   onBrowseChannels,
   onCreateChannel,
   onCloseThread,
@@ -149,10 +171,14 @@ export const ChannelPane = React.memo(function ChannelPane({
   profilePanelTab,
   profilePanelView,
   targetMessageId,
+  targetSearchMessageId,
+  targetSearchQuery,
   threadAllMessages,
   threadHeadMessage,
   threadMessages,
   threadMessagesPending = false,
+  threadMessagesError = false,
+  onRetryThreadReplies,
   threadPanelWidthPx,
   threadScrollTargetId,
   threadTypingPubkeys,
@@ -171,8 +197,14 @@ export const ChannelPane = React.memo(function ChannelPane({
     currentPubkey,
   );
   const mainComposerMedia = useMediaUpload({ deferUploadsUntilSend: true });
+  const searchHighlightProps = useSearchHighlightProps(
+    targetSearchMessageId,
+    targetSearchQuery,
+  );
   const [isMainDeferredEditPending, setMainDeferredEditPending] =
     React.useState(false);
+  const [acceptsMainAttachments, setAcceptsMainAttachments] =
+    React.useState(true);
   const isNonMemberView =
     activeChannel !== null &&
     !activeChannel.isMember &&
@@ -189,8 +221,6 @@ export const ChannelPane = React.memo(function ChannelPane({
       channelPaneMountedRef.current = false;
     };
   }, []);
-  // Clear only the auto-send key so thread state survives deferred submission;
-  // older wrappers fall back to goChannel to prevent back-navigation replay.
   const handleAutoSubmitComplete = React.useCallback(() => {
     if (onAutoSendComplete) {
       onAutoSendComplete();
@@ -222,61 +252,16 @@ export const ChannelPane = React.memo(function ChannelPane({
     isActiveWelcomeChannel,
     currentPubkey ?? null,
   );
-  const isEditInThread =
-    editTarget != null &&
-    threadHeadMessage != null &&
-    (editTarget.id === threadHeadMessage.id ||
-      threadMessages.some((entry) => entry.message.id === editTarget.id));
+  const isEditInThread = editTarget?.isThreadReply === true;
   const mainEditTarget = editTarget && !isEditInThread ? editTarget : null;
   const threadEditTarget = editTarget && isEditInThread ? editTarget : null;
-  const findLastOwnEditable = React.useCallback(
-    (candidates: TimelineMessage[]): TimelineMessage | null => {
-      if (!onEdit || !currentPubkey) return null;
-      let best: TimelineMessage | null = null;
-      for (const message of candidates) {
-        if (
-          message.kind === KIND_SYSTEM_MESSAGE ||
-          message.pubkey !== currentPubkey ||
-          message.pending
-        ) {
-          continue;
-        }
-        if (!best || message.createdAt >= best.createdAt) {
-          best = message;
-        }
-      }
-      return best;
-    },
-    [onEdit, currentPubkey],
-  );
-  const handleEditLastOwnMainMessage = React.useCallback((): boolean => {
-    const target = findLastOwnEditable(messages);
-    if (!target || !onEdit) return false;
-    onEdit(target);
-    return true;
-  }, [findLastOwnEditable, messages, onEdit]);
-
-  const handleEditLastOwnThreadMessage = React.useCallback((): boolean => {
-    if (!onEdit) return false;
-    const scope: TimelineMessage[] = [];
-    if (threadHeadMessage) scope.push(threadHeadMessage);
-    for (const entry of threadMessages) scope.push(entry.message);
-    const target = findLastOwnEditable(scope);
-    if (!target) return false;
-    onEdit(target);
-    return true;
-  }, [findLastOwnEditable, onEdit, threadHeadMessage, threadMessages]);
   const timeoutState = useTimeoutState();
-  // A moderation DM (1:1 with the relay identity) is read-only for the member;
-  // only DMs pay for the NIP-11 `self` lookup. Fails open: no `relaySelf` →
-  // ordinary DM, composer enabled.
   const relaySelfQuery = useRelaySelfQuery(activeChannel?.channelType === "dm");
   const isModerationDmChannel = isModerationDm(
     activeChannel ?? null,
     currentPubkey,
     relaySelfQuery.data,
   );
-
   const isComposerDisabled =
     !activeChannel?.isMember ||
     activeChannel.archivedAt !== null ||
@@ -286,7 +271,6 @@ export const ChannelPane = React.memo(function ChannelPane({
     isSending;
   const knownAgentPubkeys = React.useMemo(() => {
     const pubkeys = new Set<string>();
-
     for (const pubkey of agentPubkeys ?? []) {
       pubkeys.add(pubkey.toLowerCase());
     }
@@ -296,7 +280,6 @@ export const ChannelPane = React.memo(function ChannelPane({
     for (const agent of activityAgents) {
       pubkeys.add(agent.pubkey.toLowerCase());
     }
-
     return pubkeys;
   }, [activityAgents, agentPubkeys, agentSessionAgents]);
   const handleSendMessage = React.useCallback(
@@ -315,7 +298,6 @@ export const ChannelPane = React.memo(function ChannelPane({
         isActiveWelcomeChannel &&
         (containsWelcomePersonaMention(content) ||
           mentionsKnownAgent(mentionPubkeys, knownAgentPubkeys));
-
       messageTimelineRef.current?.scrollToBottomOnNextUpdate();
       await onSendMessage(
         content,
@@ -325,7 +307,6 @@ export const ChannelPane = React.memo(function ChannelPane({
         threadContext,
         forceRest,
       );
-
       if (
         channelId &&
         channelId !== activeChannelId &&
@@ -334,7 +315,6 @@ export const ChannelPane = React.memo(function ChannelPane({
       ) {
         await goChannel(channelId, { replace: true });
       }
-
       if (shouldCompleteWelcomeBanner) {
         completeWelcomeComposerBanner();
       }
@@ -352,12 +332,9 @@ export const ChannelPane = React.memo(function ChannelPane({
     hasMainComposerOverlay &&
     !isComposerDisabled &&
     !isMainDeferredEditPending &&
+    acceptsMainAttachments &&
     !isSinglePanelView;
   const hasTypingActivity = typingPubkeys.length > 0;
-  // Unified working set for the composer bar: observer-derived turns primary,
-  // bot typing fallback (both folded together by agentWorkingSignal). This is
-  // what makes the bar show for an agent whose observer stream is live but
-  // whose typing signal never arrives — and vice versa.
   const composerWorkingBotPubkeys = useChannelWorkingAgentPubkeys(
     activeChannel?.id ?? null,
   );
@@ -365,18 +342,11 @@ export const ChannelPane = React.memo(function ChannelPane({
   const hasCardMintActivity = useCardMintJobs().length > 0;
   const hasComposerBottomActivity =
     hasComposerBotActivity || hasTypingActivity || hasCardMintActivity;
-  const threadComposerBotTypingPubkeys = React.useMemo(() => {
-    if (!openThreadHeadId) return [];
-    return botTypingEntries
-      .filter((entry) => entry.threadHeadId === openThreadHeadId)
-      .map((entry) => entry.pubkey)
-      .filter(
-        (pubkey, index, all) =>
-          all.findIndex(
-            (candidate) => candidate.toLowerCase() === pubkey.toLowerCase(),
-          ) === index,
-      );
-  }, [botTypingEntries, openThreadHeadId]);
+  const threadComposerBotTypingPubkeys = React.useMemo(
+    () =>
+      selectThreadComposerBotTypingPubkeys(botTypingEntries, openThreadHeadId),
+    [botTypingEntries, openThreadHeadId],
+  );
   const hasThreadComposerBotActivity =
     threadComposerBotTypingPubkeys.length > 0;
   const directMessageIntro = React.useMemo(
@@ -388,7 +358,6 @@ export const ChannelPane = React.memo(function ChannelPane({
       }),
     [activeChannel, currentPubkey, profiles],
   );
-
   const handleWelcomeAddAgent = React.useCallback(() => {
     onAddAgent?.({
       beforeSend: () =>
@@ -398,19 +367,21 @@ export const ChannelPane = React.memo(function ChannelPane({
   const standardChannelIntro = useChannelIntro({
     activeChannel,
     onAddAgent,
+    onAddFiles,
     onBrowseChannels,
     onCreateChannel,
     onOpenMembers,
     onWelcomeAddAgent: onAddAgent ? handleWelcomeAddAgent : undefined,
   });
   const channelIntro = isHuddleTranscript ? null : standardChannelIntro;
-  const { mainTimelineEntries, visibleMessages } = useChannelPaneMessages({
-    activeChannel,
-    isHuddleTranscript,
-    messages,
-    profiles,
-    threadSummaries,
-  });
+  const { mainTimelineEntries, recentMentions, visibleMessages } =
+    useChannelPaneMessages({
+      activeChannel,
+      isHuddleTranscript,
+      messages,
+      profiles,
+      threadSummaries,
+    });
   const messageBodyAdornments = useDkgMemoryMessageAdornments(
     activeChannelId,
     messages,
@@ -436,7 +407,6 @@ export const ChannelPane = React.memo(function ChannelPane({
     for (const message of threadAllMessages) {
       messagesById.set(message.id, message);
     }
-
     return buildVideoReviewPresentationByMessageId({
       channelId: activeChannel?.id ?? null,
       channelName: activeChannel?.name,
@@ -457,25 +427,13 @@ export const ChannelPane = React.memo(function ChannelPane({
     threadAllMessages,
     threadHeadMessage,
   ]);
-
   const isOverlay = useIsThreadPanelOverlay();
   const useSplitAuxiliaryPane = !isSinglePanelView && !isOverlay;
   const threadViewMode = useThreadViewMode();
+  const hasThreadSurface =
+    Boolean(threadHeadMessage) || shouldShowThreadSkeleton;
   const useFocusThreadDrawer =
-    threadViewMode === "focus" &&
-    useSplitAuxiliaryPane &&
-    (Boolean(threadHeadMessage) || shouldShowThreadSkeleton);
-  const { channelIsCovered, markExitComplete } = useFocusDrawerPresence(
-    useFocusThreadDrawer,
-    onCloseThread,
-  );
-  const { changeThreadViewMode, layoutScrollTargetId, resolveScrollTarget } =
-    useThreadViewModeSwitch({
-      activeThreadHeadId: threadHeadMessage?.id ?? null,
-      externalScrollTargetId: threadScrollTargetId,
-      onExternalTargetResolved: onThreadScrollTargetResolved,
-      onModeChange: markExitComplete,
-    });
+    threadViewMode === "focus" && useSplitAuxiliaryPane && hasThreadSurface;
   const selectedAgent = React.useMemo(
     () =>
       agentSessionSelection.resolveSelectedAgentSession({
@@ -486,6 +444,64 @@ export const ChannelPane = React.memo(function ChannelPane({
       }),
     [agentSessionAgents, openAgentSessionPubkey, profilePanelPubkey, profiles],
   );
+  const hasIdleAuxiliary =
+    Boolean(idleAuxiliaryPanel) && Boolean(onCloseIdleAuxiliaryPanel);
+  const priorityIdleAuxiliary = shouldPrioritizeIdleAuxiliary(
+    idleAuxiliaryOverridesThread,
+    hasIdleAuxiliary,
+  );
+  const overlayIdleAuxiliaryOverThread =
+    priorityIdleAuxiliary && hasThreadSurface && !isOverlay;
+  const replaceThreadWithIdleAuxiliary =
+    priorityIdleAuxiliary && hasThreadSurface && isOverlay;
+  const useFocusIdleDrawer = shouldUseFocusIdleDrawer({
+    channelManagementOpen,
+    hasAgentSession: Boolean(activeChannel && selectedAgent),
+    hasIdleAuxiliaryPanel: Boolean(idleAuxiliaryPanel),
+    hasIdlePanelCloseHandler: Boolean(onCloseIdleAuxiliaryPanel),
+    hasProfilePanel: Boolean(profilePanelPubkey),
+    hasThreadSurface,
+    overrideThread: overlayIdleAuxiliaryOverThread,
+    useSplitAuxiliaryPane,
+  });
+  const showIdleAuxiliaryOverThread =
+    overlayIdleAuxiliaryOverThread && useFocusIdleDrawer;
+  const { channelIsCovered, markExitComplete } = useFocusDrawerPresence(
+    useFocusThreadDrawer || useFocusIdleDrawer,
+    priorityIdleAuxiliary
+      ? (onCloseIdleAuxiliaryPanel ?? onCloseThread)
+      : useFocusThreadDrawer
+        ? onCloseThread
+        : (onCloseIdleAuxiliaryPanel ?? onCloseThread),
+  );
+  const threadSurface = useThreadPanelSurface(
+    showIdleAuxiliaryOverThread,
+    markExitComplete,
+  );
+  const { changeThreadViewMode, layoutScrollTargetId, resolveScrollTarget } =
+    useThreadViewModeSwitch({
+      activeThreadHeadId: threadHeadMessage?.id ?? null,
+      externalScrollTargetId: threadScrollTargetId,
+      onExternalTargetResolved: onThreadScrollTargetResolved,
+      onModeChange: markExitComplete,
+    });
+  const {
+    handleEditLastOwnMainMessage,
+    handleEditLastOwnThreadMessage,
+    routeEdit: handleRoutedEdit,
+  } = useRoutedMessageEdit({
+    activeChannelId,
+    channelIsCovered,
+    currentPubkey,
+    editTarget,
+    isSinglePanelView,
+    mainMessages: mainTimelineEntries.map((entry) => entry.message),
+    onCloseThread,
+    onEdit,
+    threadHeadMessage,
+    threadMessages: threadMessages.map((entry) => entry.message),
+    useFocusThreadDrawer,
+  });
   const hasSplitAuxiliaryPane =
     useSplitAuxiliaryPane &&
     (channelManagementOpen ||
@@ -512,18 +528,52 @@ export const ChannelPane = React.memo(function ChannelPane({
     ) : (
       <React.Fragment key={options.key ?? testId}>{panel}</React.Fragment>
     );
-  const wrapThreadPanel = (panel: React.ReactNode) =>
-    useFocusThreadDrawer ? (
+  const wrapThreadPanel = (panel: React.ReactNode) => (
+    <ThreadPanelSurface
+      channelName={activeChannel?.name ?? "channel"}
+      covered={threadSurface.covered}
+      hasActiveEdit={threadEditTarget !== null}
+      isFocusDrawer={useFocusThreadDrawer}
+      key={THREAD_SURFACE_KEY}
+      onClose={onCloseThread}
+      ref={threadSurface.ref}
+    >
+      {useFocusThreadDrawer ? panel : wrapAux(panel, "message-thread-panel")}
+    </ThreadPanelSurface>
+  );
+  const wrapIdlePanel = (panel: React.ReactNode) =>
+    useFocusIdleDrawer && onCloseIdleAuxiliaryPanel ? (
       <FocusThreadDrawer
         channelName={activeChannel?.name ?? "channel"}
-        key={THREAD_SURFACE_KEY}
-        onClose={onCloseThread}
+        key="idle-auxiliary-surface"
+        label={idleAuxiliaryTitle || "Panel"}
+        onClose={onCloseIdleAuxiliaryPanel}
+        restoreFocusTarget={threadSurface.restoreFocusTarget}
       >
         {panel}
       </FocusThreadDrawer>
     ) : (
-      wrapAux(panel, "message-thread-panel", { key: THREAD_SURFACE_KEY })
+      wrapAux(panel, "idle-auxiliary-panel")
     );
+  const idleAuxiliarySurface =
+    idleAuxiliaryPanel && onCloseIdleAuxiliaryPanel
+      ? wrapIdlePanel(
+          <IdleAuxiliaryPanel
+            canResetWidth={canResetThreadPanelWidth}
+            headerControls={idleAuxiliaryHeaderActions}
+            isFocusDrawer={useFocusIdleDrawer}
+            isSinglePanelView={isSinglePanelView}
+            onClose={onCloseIdleAuxiliaryPanel}
+            onResetWidth={onResetThreadPanelWidth}
+            onResizeStart={onThreadPanelResizeStart}
+            title={idleAuxiliaryTitle}
+            useSplitAuxiliaryPane={useSplitAuxiliaryPane}
+            widthPx={threadPanelWidthPx}
+          >
+            {idleAuxiliaryPanel}
+          </IdleAuxiliaryPanel>,
+        )
+      : null;
   const threadHeaderLeading = useSplitAuxiliaryPane ? (
     <ThreadViewModeToggle onChange={changeThreadViewMode} />
   ) : undefined;
@@ -550,7 +600,6 @@ export const ChannelPane = React.memo(function ChannelPane({
           data-testid="channel-shared-header-backdrop"
         />
       ) : null}
-
       {!isSinglePanelView ? (
         <section
           aria-label="Channel messages and composer"
@@ -575,6 +624,11 @@ export const ChannelPane = React.memo(function ChannelPane({
           }
         >
           {isHuddleTranscript ? null : header}
+          {isHuddleTranscript && huddleThreadRepliesError ? (
+            <div className="px-5 pt-3">
+              <ThreadRepliesErrorCard onRetry={onRetryHuddleThreadReplies} />
+            </div>
+          ) : null}
           <div className="relative isolate flex min-h-0 min-w-0 flex-1 flex-col">
             <MessageTimeline
               ref={messageTimelineRef}
@@ -615,7 +669,9 @@ export const ChannelPane = React.memo(function ChannelPane({
                     : "No messages yet"
                   : "No channel selected"
               }
+              isError={isTimelineError}
               isLoading={isHuddleTranscript ? false : isTimelineLoading}
+              onRetry={onRetryTimeline}
               entranceMessageId={entranceMessageId}
               onEntranceMessageComplete={onEntranceMessageComplete}
               mainEntries={mainTimelineEntries}
@@ -625,7 +681,7 @@ export const ChannelPane = React.memo(function ChannelPane({
               firstUnreadMessageId={firstUnreadMessageId}
               unreadCount={unreadCount}
               onDelete={onDelete}
-              onEdit={onEdit}
+              onEdit={handleRoutedEdit}
               onMarkUnread={onMarkUnread}
               onMarkRead={onMarkRead}
               onReply={timelineReplyHandler}
@@ -638,6 +694,7 @@ export const ChannelPane = React.memo(function ChannelPane({
               }
               onTargetReached={onTargetReached}
               onToggleReaction={onToggleReaction}
+              {...searchHighlightProps.timeline}
               targetMessageId={targetMessageId}
               splitThreadPanelOpen={
                 useSplitAuxiliaryPane &&
@@ -652,7 +709,12 @@ export const ChannelPane = React.memo(function ChannelPane({
                 className="flex items-center gap-3 border-t border-border/80 bg-card/50 px-5 py-3"
               >
                 <div className="flex min-w-0 flex-1 items-center gap-2 text-sm text-muted-foreground">
-                  <Hash className="h-4 w-4 shrink-0" />
+                  {activeChannel ? (
+                    <ChannelGlyph
+                      channel={activeChannel}
+                      className="h-4 w-4 shrink-0"
+                    />
+                  ) : null}
                   <span className="truncate">
                     Viewing{" "}
                     <span className="font-medium text-foreground">
@@ -701,7 +763,6 @@ export const ChannelPane = React.memo(function ChannelPane({
                   ) : null}
                   <ComposerDockBackdrop gutterClassName="inset-x-5" />
                   <MessageComposer
-                    audienceContext={{ type: "channel" }}
                     channelId={activeChannel?.id ?? null}
                     channelName={activeChannel?.name ?? "channel"}
                     channelType={activeChannel?.channelType ?? null}
@@ -713,6 +774,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                     onAutoSubmitComplete={handleAutoSubmitComplete}
                     isSending={isSending}
                     mediaController={mainComposerMedia}
+                    onAttachmentAcceptanceChange={setAcceptsMainAttachments}
                     onDeferredEditPendingChange={setMainDeferredEditPending}
                     onCancelEdit={onCancelEdit}
                     onEditLastOwnMessage={handleEditLastOwnMainMessage}
@@ -723,7 +785,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                         : undefined
                     }
                     onSend={handleSendMessage}
-                    profiles={profiles}
+                    {...{ profiles, recentMentionPubkeys: recentMentions }}
                     showBackgroundUploadProgress={false}
                     placeholder={
                       timeoutState.active
@@ -743,10 +805,6 @@ export const ChannelPane = React.memo(function ChannelPane({
                     }
                     showTopBorder={false}
                   />
-                  {/* The activity accessory is anchored in the dock's reserved
-                    bottom rail, so fading it cannot change the observed
-                    overlay height or move the conversation. Its natural
-                    content height remains responsive. */}
                   <ChannelComposerActivityAccessory
                     agents={activityAgents}
                     channel={activeChannel}
@@ -767,7 +825,6 @@ export const ChannelPane = React.memo(function ChannelPane({
           </div>
         </section>
       ) : null}
-
       {/*
        * `AnimatePresence` keeps the focus thread drawer mounted through its exit
        * animation — without it the drawer's own existence condition
@@ -777,7 +834,8 @@ export const ChannelPane = React.memo(function ChannelPane({
        * frozen snapshot because the panel is fully prop-driven.
        */}
       <DkgMemoryDock channelId={activeChannel?.id ?? null} />
-      <AnimatePresence onExitComplete={markExitComplete}>
+      {/* Serialize replacements so focus drawers keep one travel direction. */}
+      <AnimatePresence mode="wait" onExitComplete={markExitComplete}>
         {channelManagementOpen && activeChannel ? (
           <ChannelManagementAuxiliaryPanel
             activeChannel={activeChannel}
@@ -794,6 +852,8 @@ export const ChannelPane = React.memo(function ChannelPane({
             useSplitAuxiliaryPane={useSplitAuxiliaryPane}
             transparentChrome={hasSplitAuxiliaryPane}
           />
+        ) : replaceThreadWithIdleAuxiliary && idleAuxiliarySurface ? (
+          idleAuxiliarySurface
         ) : threadHeadMessage ? (
           (() => {
             const panel = (
@@ -818,7 +878,7 @@ export const ChannelPane = React.memo(function ChannelPane({
                 onCancelReply={onCancelThreadReply}
                 onClose={onCloseThread}
                 onDelete={onDelete}
-                onEdit={onEdit}
+                onEdit={handleRoutedEdit}
                 onEditLastOwnMessage={handleEditLastOwnThreadMessage}
                 onEditSave={onEditSave}
                 onFollowThread={onFollowThread}
@@ -834,16 +894,19 @@ export const ChannelPane = React.memo(function ChannelPane({
                 onScrollTargetSettled={resolveScrollTarget}
                 onToggleReaction={onToggleReaction}
                 onUnfollowThread={onUnfollowThread}
-                profiles={profiles}
+                {...{ profiles, recentMentionPubkeys: recentMentions }}
                 replyTargetMessage={threadReplyTargetMessage}
                 scrollTargetHighlights={!layoutScrollTargetId}
                 scrollTargetId={layoutScrollTargetId ?? threadScrollTargetId}
+                {...searchHighlightProps.thread}
                 threadHead={threadHeadMessage}
                 videoReviewPresentation={threadVideoReviewPresentation}
                 messageBodyAdornments={messageBodyAdornments}
                 widthPx={threadPanelWidthPx}
                 threadReplies={threadMessages}
                 threadRepliesPending={threadMessagesPending}
+                threadRepliesError={threadMessagesError}
+                onRetryThreadReplies={onRetryThreadReplies}
                 threadUnreadCount={threadUnreadCounts?.get(
                   threadHeadMessage.id,
                 )}
@@ -883,10 +946,6 @@ export const ChannelPane = React.memo(function ChannelPane({
           })()
         ) : activeChannel && selectedAgent ? (
           (() => {
-            // When the panel was opened from a different channel than the
-            // currently active one, re-scope it to the active channel so
-            // that both the content/header AND channel-backed actions (e.g.
-            // Stop current turn) operate on the same channel object.
             const effectiveAgentSessionChannelId =
               openAgentSessionChannelId &&
               activeChannel.id !== openAgentSessionChannelId
@@ -946,7 +1005,12 @@ export const ChannelPane = React.memo(function ChannelPane({
             );
             return wrapAux(panel, "user-profile-panel");
           })()
-        ) : null}
+        ) : (
+          idleAuxiliarySurface
+        )}
+      </AnimatePresence>
+      <AnimatePresence onExitComplete={threadSurface.markExitComplete}>
+        {showIdleAuxiliaryOverThread ? idleAuxiliarySurface : null}
       </AnimatePresence>
     </div>
   );

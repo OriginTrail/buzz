@@ -444,7 +444,11 @@ pub async fn propose(
         .map_err(|_| not_found("relay: no community is configured for this host"))?;
     let expected_url =
         bridge::nip98_expected_url(&state.config.relay_url, &tenant, "/api/dkg/memory");
-    let (requester, event_id) = bridge::verify_bridge_auth_with_options(
+    let bridge::VerifiedBridgeAuth {
+        pubkey: requester,
+        event_id_bytes: event_id,
+        signed_created_at,
+    } = bridge::verify_bridge_auth_with_options(
         &headers,
         "POST",
         &expected_url,
@@ -455,14 +459,13 @@ pub async fn propose(
     bridge::enforce_http_admission(&state, &tenant, &requester).await?;
     bridge::check_nip98_replay(&state, &tenant, event_id).await?;
     let requester_bytes = requester.to_bytes();
-    let auth_tag = headers
-        .get("x-auth-tag")
-        .and_then(|value| value.to_str().ok());
+    let auth_tag = super::relay_members::extract_auth_tag_header(&headers);
     super::relay_members::enforce_relay_membership(
         &state,
         tenant.community(),
         &requester_bytes,
         auth_tag,
+        signed_created_at,
     )
     .await?;
 
