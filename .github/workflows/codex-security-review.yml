@@ -1,15 +1,10 @@
 name: Codex Security Review
 
-on: # zizmor: ignore[dangerous-triggers] untrusted PR code is inspected only in an isolated read-only job
-  pull_request_target:
-    branches: [main]
-    types: [opened, reopened, ready_for_review, synchronize]
-  issue_comment:
-    types: [created]
-  push:
-    branches: [main]
-  repository_dispatch:
-    types: [codex-security-review-reconcile]
+# The upstream workflow is designed for block/buzz organization membership and
+# secrets. Keep its implementation available for painless upstream syncs, but
+# do not expose its privileged automatic triggers in the OriginTrail fork.
+on:
+  workflow_dispatch:
 
 jobs:
   prepare-review:
