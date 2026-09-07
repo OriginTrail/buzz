@@ -43,6 +43,31 @@ import {
   type EmojiMartEmoji,
   isAvatarFileDrag,
 } from "./AgentCreationPreview.utils";
+
+function safeAvatarPreviewUrl(value: string | null | undefined) {
+  const candidate = value?.trim();
+  if (!candidate) {
+    return undefined;
+  }
+
+  if (
+    /^data:image\/(?:gif|jpeg|png|webp);base64,[a-z0-9+/=\s]+$/iu.test(
+      candidate,
+    )
+  ) {
+    return candidate;
+  }
+
+  try {
+    const parsed = new URL(candidate);
+    return parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? parsed.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function AgentCreationPreview({
   assetLabel = "avatar",
   avatarUrl,
@@ -278,6 +303,11 @@ export function AgentCreationPreview({
     () => parseEmojiAvatarDataUrl(avatarUrl ?? ""),
     [avatarUrl],
   );
+  const avatarPreviewUrl = React.useMemo(
+    () => safeAvatarPreviewUrl(avatarUrl),
+    [avatarUrl],
+  );
+  const hasRenderableAvatar = Boolean(emojiAvatarPreview || avatarPreviewUrl);
   const applyButtonTransition = shouldReduceMotion
     ? { duration: 0 }
     : AVATAR_APPLY_MOTION_TRANSITION;
@@ -738,18 +768,18 @@ export function AgentCreationPreview({
                   {emojiAvatarPreview.emoji}
                 </span>
               </div>
-            ) : isRoundedSquare && avatarUrl ? (
+            ) : isRoundedSquare && avatarPreviewUrl ? (
               <img
                 alt={`${label} ${assetLabel}`}
                 className={cn(
                   "h-full w-full object-cover shadow-xs",
                   isCompact ? "rounded-2xl" : "rounded-[2rem]",
                 )}
-                src={avatarUrl}
+                src={avatarPreviewUrl}
               />
             ) : (
               <ProfileAvatar
-                avatarUrl={avatarUrl}
+                avatarUrl={avatarPreviewUrl ?? null}
                 shape="squircle"
                 className={cn(
                   "h-full w-full",
@@ -798,7 +828,7 @@ export function AgentCreationPreview({
             <div
               className={cn("relative", isCompact ? "h-16 w-16" : "h-36 w-36")}
             >
-              {hasAvatar && isRoundedSquare ? (
+              {hasRenderableAvatar && isRoundedSquare ? (
                 <MaskedAvatarBadgeFrame
                   badge={
                     <PopoverTrigger asChild>
@@ -883,11 +913,11 @@ export function AgentCreationPreview({
                           !isAvatarMenuOpen &&
                           "ring-2 ring-primary/30",
                       )}
-                      src={avatarUrl ?? ""}
+                      src={avatarPreviewUrl}
                     />
                   )}
                 </MaskedAvatarBadgeFrame>
-              ) : hasAvatar ? (
+              ) : hasRenderableAvatar ? (
                 <MaskedAvatarBadgeFrame
                   badge={
                     <PopoverTrigger asChild>
@@ -961,7 +991,7 @@ export function AgentCreationPreview({
                     </div>
                   ) : (
                     <ProfileAvatar
-                      avatarUrl={avatarUrl}
+                      avatarUrl={avatarPreviewUrl ?? null}
                       shape="squircle"
                       className={cn(
                         "h-full w-full transition-shadow duration-150",
